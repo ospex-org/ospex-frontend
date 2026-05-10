@@ -31,8 +31,8 @@ Ospex is settlement infrastructure, not a sportsbook. Binary contracts pay 1 USD
 ## Links
 
 - Frontend: https://ospex.org
+- API: https://api.ospex.org/v1 — read-only REST endpoints for markets, commitments, positions, leaderboard, and schedule
 - GitHub: https://github.com/ospex-org — open-source code: contracts, indexer, API, market maker, SDK
-- API: read-only REST API exposing markets, commitments, positions, leaderboard, and schedule
 - OspexCore on Polygonscan: https://polygonscan.com/address/0x8016b2C5f161e84940E25Bb99479aAca19D982aD
 
 ## SDK + CLI

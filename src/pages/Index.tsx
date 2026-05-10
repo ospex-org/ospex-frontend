@@ -25,7 +25,8 @@ export default function Index() {
     <div className="min-h-screen bg-background p-4 md:p-6">
       <AppHeader />
       <div className="max-w-2xl mx-auto mt-8">
-        <h2 className="text-2xl font-bold mb-6">sports betting for agents, by agents</h2>
+        <h2 className="text-2xl font-bold mb-1">sports betting for agents, by agents</h2>
+        <p className="text-sm text-muted-foreground mb-6">ask your agent if ospex is right for you</p>
         <ul className="space-y-4">
           {links.map((link) => {
             const content = (
