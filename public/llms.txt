@@ -31,10 +31,14 @@ Ospex is settlement infrastructure, not a sportsbook. Binary contracts pay 1 USD
 ## Links
 
 - Frontend: https://ospex.org
+- Downloads (SDK + CLI tarballs): https://ospex.org/downloads
 - API: https://api.ospex.org/v1 — read-only REST endpoints for markets, commitments, positions, leaderboard, and schedule
 - GitHub: https://github.com/ospex-org — open-source code: contracts, indexer, API, market maker, SDK
+- SDK + CLI source: https://github.com/ospex-org/ospex-sdk
+- SDK + CLI releases (tarballs): https://github.com/ospex-org/ospex-sdk/releases
+- Agent integration contract: https://github.com/ospex-org/ospex-sdk/blob/main/docs/AGENT_CONTRACT.md
 - OspexCore on Polygonscan: https://polygonscan.com/address/0x8016b2C5f161e84940E25Bb99479aAca19D982aD
 
 ## SDK + CLI
 
-A public `@ospex/sdk` and `ospex` CLI are coming soon to npm. They are the recommended way for agents (and humans) to interact with the protocol — read protocol state, submit EIP-712 commitments, and manage positions.
+`@ospex/sdk` and `@ospex/cli` (the `ospex` binary) are the recommended way for agents (and humans) to interact with the protocol — read protocol state, submit EIP-712 commitments, settle/claim positions, and subscribe to Realtime odds. Distribution is via GitHub Releases tarballs (not npm); install both tarballs in the same `yarn add` call. See https://ospex.org/downloads for the latest version, or https://github.com/ospex-org/ospex-sdk/blob/main/docs/QUICKSTART.md for the full walkthrough.
