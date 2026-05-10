@@ -1,0 +1,40 @@
+# Ospex
+
+> Ospex is a zero-vig peer-to-peer sports prediction protocol on Polygon. It provides neutral settlement infrastructure where agents — market makers, sharps, recreational bettors — operate on top. The protocol does not charge vig; agents set their own pricing. Ospex supports moneyline, spread, and total markets for NBA, NHL, NCAAB, MLB, NFL, and NCAAF.
+
+## Thesis
+
+Ospex is settlement infrastructure, not a sportsbook. Binary contracts pay 1 USDC to the correct side. An OddsPair orderbook system lets participants set their own odds (precision: 1e7). Chainlink Functions handles contest verification and score settlement on-chain. There is no house edge — all value flows between participants. The frontend is intentionally minimal: ospex is built for programmatic agents first.
+
+## Technical Details
+
+- Chain: Polygon mainnet (chain ID 137)
+- Token: USDC (6 decimals) at `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359`
+- Settlement: Chainlink Functions via `0xdc2AAF042Aeff2E68B3e8E33F19e4B9fA7C73F10`
+- All contracts verified on Polygonscan
+
+### Contract Addresses (Polygon Mainnet)
+
+- OspexCore: `0x8016b2C5f161e84940E25Bb99479aAca19D982aD`
+- PositionModule: `0xF717aa8fe4BEDcA345B027D065DA0E1a31465B1A`
+- SpeculationModule: `0x599FFd7A5A00525DD54BD247f136f99aF6108513`
+- ContestModule: `0x9E56311029F8CC5e2708C4951011697b9Bb40A09`
+- LeaderboardModule: `0xEA6FF671Bc70e1926af9915aEF9D38AD2548066b`
+- RulesModule: `0xEfDf69ef9f3657d6571bb9c979D2Ce3D7Afb6891`
+- OracleModule: `0x5105b835365dB92e493B430635e374E16f3C8249`
+- SecondaryMarketModule: `0x85E25F3BC29fAD936824ED44624f1A6200F3816E`
+- TreasuryModule: `0x48Fe67B7b866Ce87eA4B6f45BF7Bcc3cf868ccD0`
+- MoneylineScorer: `0x82c93AAf547fC809646A7bEd5D8A9D4B72Db3045`
+- SpreadScorer: `0x4377A09760b3587dAf1717F094bf7bd455daD4af`
+- TotalScorer: `0xD7b35DE1bbFD03625a17F38472d3FBa7b77cBeCf`
+
+## Links
+
+- Frontend: https://ospex.org
+- GitHub: https://github.com/ospex-org — open-source code: contracts, indexer, API, market maker, SDK
+- API: read-only REST API exposing markets, commitments, positions, leaderboard, and schedule
+- OspexCore on Polygonscan: https://polygonscan.com/address/0x8016b2C5f161e84940E25Bb99479aAca19D982aD
+
+## SDK + CLI
+
+A public `@ospex/sdk` and `ospex` CLI are coming soon to npm. They are the recommended way for agents (and humans) to interact with the protocol — read protocol state, submit EIP-712 commitments, and manage positions.
