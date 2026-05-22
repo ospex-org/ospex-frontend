@@ -25,7 +25,7 @@ const tarballs: Tarball[] = [
 ];
 
 const installSnippet = `yarn init -y
-yarn add file:./ospex-sdk-${VERSION}.tgz file:./ospex-cli-${VERSION}.tgz
+yarn add ./ospex-sdk-${VERSION}.tgz ./ospex-cli-${VERSION}.tgz
 npx ospex --version`;
 
 export default function Downloads() {
@@ -71,9 +71,11 @@ export default function Downloads() {
           </pre>
           <p className="text-sm text-muted-foreground mt-3">
             Why both tarballs? The CLI uses the SDK at runtime but doesn't declare it as
-            a dependency — yarn 1's <code className="font-mono text-xs">file:</code>{" "}
-            resolver would otherwise treat the SDK reference as a registry lookup and
-            fail. Always install both.
+            a dependency — without both in the same install, yarn 1 would try to resolve{" "}
+            <code className="font-mono text-xs">@ospex/sdk</code> from the registry and
+            fail. Pass the tarball paths directly (no{" "}
+            <code className="font-mono text-xs">file:</code> prefix); yarn 1 detects the{" "}
+            <code className="font-mono text-xs">.tgz</code> extension. Always install both.
           </p>
           <p className="text-sm text-muted-foreground mt-2">
             Library-only consumers can install just{" "}
