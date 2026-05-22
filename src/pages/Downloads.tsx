@@ -1,6 +1,6 @@
 import { AppHeader } from "@/components/AppHeader";
 
-const VERSION = "0.2.1";
+const VERSION = "0.3.0";
 const RELEASE_BASE = `https://github.com/ospex-org/ospex-sdk/releases/download/v${VERSION}`;
 
 type Tarball = {
@@ -13,7 +13,7 @@ const tarballs: Tarball[] = [
   {
     title: "@ospex/sdk",
     description:
-      "TypeScript SDK — reads, EIP-712 signed commitments, position lifecycle, Realtime odds.",
+      "TypeScript SDK — reads, EIP-712 signed commitments, position lifecycle, streaming odds.",
     filename: `ospex-sdk-${VERSION}.tgz`,
   },
   {
