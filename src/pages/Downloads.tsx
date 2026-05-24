@@ -1,42 +1,70 @@
+import { useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
+import { cn } from "@/lib/utils";
 
-const VERSION = "0.3.1";
+const VERSION = "0.4.0";
 const RELEASE_BASE = `https://github.com/ospex-org/ospex-sdk/releases/download/v${VERSION}`;
 
 type Tarball = {
   title: string;
   description: string;
   filename: string;
+  primary?: boolean;
 };
+
+const cliTarball = `ospex-cli-${VERSION}.tgz`;
+const sdkTarball = `ospex-sdk-${VERSION}.tgz`;
 
 const tarballs: Tarball[] = [
   {
-    title: "@ospex/sdk",
-    description:
-      "TypeScript SDK — reads, EIP-712 signed commitments, position lifecycle, streaming odds.",
-    filename: `ospex-sdk-${VERSION}.tgz`,
-  },
-  {
     title: "@ospex/cli",
     description:
-      "Command-line interface — the ospex binary, built on top of the SDK.",
-    filename: `ospex-cli-${VERSION}.tgz`,
+      "The ospex command line — a single self-contained bundle with every dependency (including @ospex/sdk) inlined. Install globally, then run ospex.",
+    filename: cliTarball,
+    primary: true,
+  },
+  {
+    title: "@ospex/sdk",
+    description:
+      "Optional unbundled library for programmatic consumers writing code against @ospex/sdk — reads, EIP-712 signed commitments, position lifecycle, streaming odds. CLI users do not need this.",
+    filename: sdkTarball,
   },
 ];
 
-const installSnippet = `yarn init -y
-yarn add ./ospex-sdk-${VERSION}.tgz ./ospex-cli-${VERSION}.tgz
-npx ospex --version`;
+type InstallTab = {
+  id: string;
+  label: string;
+  snippet: string;
+};
+
+const installTabs: InstallTab[] = [
+  {
+    id: "npm",
+    label: "npm",
+    snippet: `npm install -g ${RELEASE_BASE}/${cliTarball}
+ospex --version`,
+  },
+  {
+    id: "yarn",
+    label: "yarn",
+    snippet: `yarn global add ${RELEASE_BASE}/${cliTarball}
+ospex --version`,
+  },
+];
 
 export default function Downloads() {
+  const [activeTab, setActiveTab] = useState(installTabs[0].id);
+  const active = installTabs.find((t) => t.id === activeTab) ?? installTabs[0];
+
   return (
     <div className="min-h-screen bg-background p-4 md:p-6">
       <AppHeader />
       <div className="max-w-2xl mx-auto mt-8">
         <h2 className="text-2xl font-bold mb-1">downloads</h2>
         <p className="text-sm text-muted-foreground mb-6">
-          @ospex/sdk and @ospex/cli — install both tarballs in the same{" "}
-          <code className="font-mono text-xs">yarn add</code> call.
+          The <code className="font-mono text-xs">ospex</code> CLI ships as one
+          self-contained bundle — install it globally, then just type{" "}
+          <code className="font-mono text-xs">ospex</code>. No package manager juggling.
         </p>
 
         <ul className="space-y-4">
@@ -52,6 +80,15 @@ export default function Downloads() {
                   <span className="ml-2 inline-block rounded-full border border-border px-2 py-0.5 text-xs font-normal text-muted-foreground align-middle">
                     v{VERSION}
                   </span>
+                  {t.primary ? (
+                    <span className="ml-2 inline-block rounded-full bg-primary/15 px-2 py-0.5 text-xs font-normal text-primary align-middle">
+                      recommended
+                    </span>
+                  ) : (
+                    <span className="ml-2 inline-block rounded-full border border-border px-2 py-0.5 text-xs font-normal text-muted-foreground align-middle">
+                      optional · library
+                    </span>
+                  )}
                 </span>
                 <span className="block text-sm text-muted-foreground mt-1">
                   {t.description}
@@ -66,20 +103,37 @@ export default function Downloads() {
 
         <div className="mt-8">
           <h3 className="text-sm font-semibold mb-2">install</h3>
+          <div className="flex gap-1 mb-2" role="tablist" aria-label="install command">
+            {installTabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={t.id === activeTab}
+                onClick={() => setActiveTab(t.id)}
+                className={cn(
+                  "rounded-md px-3 py-1 text-sm font-medium transition-colors",
+                  t.id === activeTab
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:bg-secondary/30 hover:text-foreground",
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
           <pre className="bg-secondary/30 rounded-lg p-3 text-sm overflow-x-auto">
-            <code className="font-mono">{installSnippet}</code>
+            <code className="font-mono">{active.snippet}</code>
           </pre>
           <p className="text-sm text-muted-foreground mt-3">
-            Why both tarballs? The CLI uses the SDK at runtime but doesn't declare it as
-            a dependency — without both in the same install, yarn 1 would try to resolve{" "}
-            <code className="font-mono text-xs">@ospex/sdk</code> from the registry and
-            fail. Pass the tarball paths directly (no{" "}
-            <code className="font-mono text-xs">file:</code> prefix); yarn 1 detects the{" "}
-            <code className="font-mono text-xs">.tgz</code> extension. Always install both.
+            One global install, nothing else to resolve — every dependency is inlined into
+            the bundle, so there's no second tarball to add and no registry lookup. After it
+            installs, <code className="font-mono text-xs">ospex</code> is on your PATH.
           </p>
           <p className="text-sm text-muted-foreground mt-2">
-            Library-only consumers can install just{" "}
-            <code className="font-mono text-xs">@ospex/sdk</code> without the CLI.
+            Writing code against{" "}
+            <code className="font-mono text-xs">@ospex/sdk</code>? Grab the optional SDK
+            tarball above. CLI users don't need it.
           </p>
         </div>
 

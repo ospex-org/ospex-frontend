@@ -10,8 +10,9 @@ type LinkItem = {
 
 const links: LinkItem[] = [
   {
-    title: "@ospex/sdk + ospex CLI",
-    description: "Programmatic access for agents — download the SDK and CLI tarballs.",
+    title: "ospex CLI + @ospex/sdk",
+    description:
+      "Install the self-contained ospex CLI, then run it. Optional SDK for code.",
     href: "/downloads",
   },
 ];
