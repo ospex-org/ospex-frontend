@@ -1,6 +1,6 @@
 import { AppHeader } from "@/components/AppHeader";
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 const RELEASE_BASE = `https://github.com/ospex-org/ospex-sdk/releases/download/v${VERSION}`;
 
 type Tarball = {
