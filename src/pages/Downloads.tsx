@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Check, Copy } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import { cn } from "@/lib/utils";
 
@@ -31,30 +32,49 @@ const tarballs: Tarball[] = [
   },
 ];
 
+const installUrl = `${RELEASE_BASE}/${cliTarball}`;
+const verifyCommand = "ospex --version";
+
 type InstallTab = {
   id: string;
   label: string;
-  snippet: string;
+  command: string;
 };
 
 const installTabs: InstallTab[] = [
-  {
-    id: "npm",
-    label: "npm",
-    snippet: `npm install -g ${RELEASE_BASE}/${cliTarball}
-ospex --version`,
-  },
-  {
-    id: "yarn",
-    label: "yarn",
-    snippet: `yarn global add ${RELEASE_BASE}/${cliTarball}
-ospex --version`,
-  },
+  { id: "npm", label: "npm", command: "npm install -g" },
+  { id: "yarn", label: "yarn", command: "yarn global add" },
 ];
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-label={copied ? "Copied" : label}
+      title={copied ? "Copied" : label}
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1800);
+          },
+          () => undefined,
+        );
+      }}
+      className="absolute right-2 top-2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+    >
+      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+    </button>
+  );
+}
 
 export default function Downloads() {
   const [activeTab, setActiveTab] = useState(installTabs[0].id);
   const active = installTabs.find((t) => t.id === activeTab) ?? installTabs[0];
+  // Single source for both the displayed text and the clipboard text, so the
+  // visible <code> is always a valid one-line command (no embedded newline).
+  const installCommand = `${active.command} ${installUrl}`;
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-6">
@@ -80,15 +100,9 @@ export default function Downloads() {
                   <span className="ml-2 inline-block rounded-full border border-border px-2 py-0.5 text-xs font-normal text-muted-foreground align-middle">
                     v{VERSION}
                   </span>
-                  {t.primary ? (
-                    <span className="ml-2 inline-block rounded-full bg-primary/15 px-2 py-0.5 text-xs font-normal text-primary align-middle">
-                      recommended
-                    </span>
-                  ) : (
-                    <span className="ml-2 inline-block rounded-full border border-border px-2 py-0.5 text-xs font-normal text-muted-foreground align-middle">
-                      optional · library
-                    </span>
-                  )}
+                  <span className="ml-2 inline-block rounded-full border border-border px-2 py-0.5 text-xs font-normal text-muted-foreground align-middle">
+                    {t.primary ? "recommended" : "optional · library"}
+                  </span>
                 </span>
                 <span className="block text-sm text-muted-foreground mt-1">
                   {t.description}
@@ -122,13 +136,24 @@ export default function Downloads() {
               </button>
             ))}
           </div>
-          <pre className="bg-secondary/30 rounded-lg p-3 text-sm overflow-x-auto">
-            <code className="font-mono">{active.snippet}</code>
-          </pre>
+          <div className="relative">
+            <pre className="bg-secondary/30 rounded-lg p-3 pr-12 text-sm whitespace-pre-wrap break-words">
+              <code className="font-mono">{installCommand}</code>
+            </pre>
+            <CopyButton text={installCommand} label="Copy install command" />
+          </div>
+          <p className="text-xs text-muted-foreground mt-3 mb-1">
+            then verify it's on your PATH:
+          </p>
+          <div className="relative">
+            <pre className="bg-secondary/30 rounded-lg p-3 pr-12 text-sm">
+              <code className="font-mono">{verifyCommand}</code>
+            </pre>
+            <CopyButton text={verifyCommand} label="Copy verify command" />
+          </div>
           <p className="text-sm text-muted-foreground mt-3">
             One global install, nothing else to resolve — every dependency is inlined into
-            the bundle, so there's no second tarball to add and no registry lookup. After it
-            installs, <code className="font-mono text-xs">ospex</code> is on your PATH.
+            the bundle, so there's no second tarball to add and no registry lookup.
           </p>
           <p className="text-sm text-muted-foreground mt-2">
             Writing code against{" "}
