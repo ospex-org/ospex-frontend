@@ -72,6 +72,9 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 export default function Downloads() {
   const [activeTab, setActiveTab] = useState(installTabs[0].id);
   const active = installTabs.find((t) => t.id === activeTab) ?? installTabs[0];
+  // Single source for both the displayed text and the clipboard text, so the
+  // visible <code> is always a valid one-line command (no embedded newline).
+  const installCommand = `${active.command} ${installUrl}`;
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-6">
@@ -134,13 +137,10 @@ export default function Downloads() {
             ))}
           </div>
           <div className="relative">
-            <pre className="bg-secondary/30 rounded-lg p-3 pr-12 text-sm whitespace-pre-wrap break-all">
-              <code className="font-mono">{`${active.command}\n${installUrl}`}</code>
+            <pre className="bg-secondary/30 rounded-lg p-3 pr-12 text-sm whitespace-pre-wrap break-words">
+              <code className="font-mono">{installCommand}</code>
             </pre>
-            <CopyButton
-              text={`${active.command} ${installUrl}`}
-              label="Copy install command"
-            />
+            <CopyButton text={installCommand} label="Copy install command" />
           </div>
           <p className="text-xs text-muted-foreground mt-3 mb-1">
             then verify it's on your PATH:
