@@ -3,7 +3,7 @@ import { Check, Copy } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import { cn } from "@/lib/utils";
 
-const VERSION = "0.4.8";
+const VERSION = "0.5.0";
 const RELEASE_BASE = `https://github.com/ospex-org/ospex-sdk/releases/download/v${VERSION}`;
 
 type Tarball = {
@@ -27,7 +27,7 @@ const tarballs: Tarball[] = [
   {
     title: "@ospex/sdk",
     description:
-      "Optional unbundled library for programmatic consumers writing code against @ospex/sdk — reads, EIP-712 signed commitments, position lifecycle, streaming odds. CLI users do not need this.",
+      "Optional unbundled library for programmatic consumers writing code against @ospex/sdk — reads, EIP-712 signed commitments, position lifecycle, streaming odds, owner-authenticated own-state stream. CLI users do not need this.",
     filename: sdkTarball,
   },
 ];
