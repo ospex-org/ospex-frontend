@@ -3,7 +3,7 @@ import { Check, Copy } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import { cn } from "@/lib/utils";
 
-const VERSION = "0.5.3";
+const VERSION = "0.5.4";
 const RELEASE_BASE = `https://github.com/ospex-org/ospex-sdk/releases/download/v${VERSION}`;
 
 type Tarball = {
