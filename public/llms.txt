@@ -6,31 +6,36 @@
 
 Ospex is settlement infrastructure for sports prediction markets, not a sportsbook. A maker signs an EIP-712 off-chain commitment that names a side, a stake size, and the odds. A taker matches that commitment on-chain through MatchingModule, which opens a position on each side in PositionModule. Odds are uint16 integer ticks with ODDS_SCALE = 100, so 1.91x is the tick 191 and 2.50x is 250.
 
-When the underlying game finishes, Chainlink Functions verifies the contest and reports the final score on-chain; settlement is permissionless, and winners then claim their positions. Zero vig — no house edge, and all value flows between participants. The frontend is intentionally minimal: Ospex is built for programmatic agents first, through the SDK and CLI.
+When the underlying game finishes, an off-chain Chainlink CRE (Chainlink Runtime Environment) workflow verifies the contest and reports the final score on-chain through the CreOracleReceiver; settlement is permissionless, and winners then claim their positions. Zero vig — no house edge, and all value flows between participants. The frontend is intentionally minimal: Ospex is built for programmatic agents first, through the SDK and CLI.
 
 ## Technical Details
 
 - Chain: Polygon mainnet (chain ID 137)
 - Token: USDC (6 decimals) at `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359`
-- Settlement: Chainlink Functions (router `0xdc2AAF042Aeff2E68B3e8E33F19e4B9fA7C73F10`, subscription 191)
+- Oracle: Chainlink CRE — an off-chain workflow verifies and scores contests against three independent sports-data sources and reports on-chain to `CreOracleReceiver`. There is no Chainlink Functions router, no DON subscription, and no per-call LINK; CRE execution is funded off-chain by the workflow owner. Oracle requests (verify / market update / score) are permissionless, and an unscored contest auto-voids and refunds principal after a cooldown.
+- Oracle governance: the CRE workflow is owned by `OspexCreTimelock`, a per-action timelock on Ethereum mainnet — a 7-day delay applies to workflow code/lifecycle changes (observable on-chain before they take effect). It cannot move or trap protocol funds: settlement is immutable and PositionModule has zero admin functions.
 - Odds: uint16 integer ticks, ODDS_SCALE = 100 — e.g. 191 = 1.91x, 250 = 2.50x; valid range 101 to 10100
-- Deployed 2026-04-28 (Polygon block 86135682); all contracts verified on Polygonscan
+- Deployed 2026-06-28 (Round 5, the CRE oracle migration; Polygon block 89322650); all contracts verified on Polygonscan. The protocol is finalized and zero-admin — after `finalize()` no address holds any privileged on-chain capability.
 
 ### Contract Addresses (Polygon Mainnet)
 
-- OspexCore: `0xECD12Af197FBF4C9F706B5Eb11a19c40Cfd643db`
-- PositionModule: `0x0DCd42f8609cd7884ddBa3481b03a78dfc88366c`
-- SpeculationModule: `0xd757387893E779AC35451CeA639a408A537b9a1B`
-- ContestModule: `0x1Eb0048650380369C6F4239dE070114463626102`
-- LeaderboardModule: `0x63f76D5796296FFB94132C6f70d3ff9c3c5a0DEF`
-- RulesModule: `0x05aF3d55F44CfaFA59c3B152A1547b5219d90f93`
-- OracleModule: `0x7e1397eD5b4c9f606DCF2EB0281485B2296E29Bb`
-- SecondaryMarketModule: `0xaD2B4437296B46a1b107Bb2dB7AC4082182b6059`
-- TreasuryModule: `0xCB56CD2c509301e888965DD3A2E5C486Fe03a56e`
-- MatchingModule: `0x1B93579B044f0eE3c4C8a9F479A323DeF7770712`
-- MoneylineScorer: `0xd846B7FdbD8C9F67d1580B2C6a8Bd7Fdcb15390b`
-- SpreadScorer: `0x99c5fF5131F269cA178e2Ea78f2a2A222a3a7d5e`
-- TotalScorer: `0xC141679f09413EDe38E3Cd36a3e4aDE423827972`
+- OspexCore: `0x40047BAFcdEd16C938058b7b67186299a2893561`
+- ContestModule: `0x0f838AF735E95625905c6acFB887a2E9f4DB9216`
+- SpeculationModule: `0xEA21b58E91eDcA41d0c42A8655234F8A64fa31bc`
+- PositionModule: `0x3C71fdB8ABF41487a512440e5ce6490158C26e56`
+- MatchingModule: `0x46Af20B6307Aa0Ec13de10EF58a02c5F1b5C9559`
+- CreOracleReceiver (CRE_ORACLE_RECEIVER slot): `0x06e3470012039797119Ae30e1236169304F9220C`
+- TreasuryModule: `0x07f357e67cc9B48D029b1E4C9B7F45569a2eB85C`
+- LeaderboardModule: `0x02228F4bAB35d9631296C47C2103789474aD72ee`
+- RulesModule: `0x5a5662C8246Ed3dC2422Cc8f773564fA41b34723`
+- SecondaryMarketModule: `0xf779d82E9a11234767921A73913dAd429F140aFB`
+- MoneylineScorerModule: `0x59555106D4B5f1A797f3552f60ac418Eb6B6f6BD`
+- SpreadScorerModule: `0x8f293da716164d5A32dc087A85e5164D929ae9D4`
+- TotalScorerModule: `0xB4B1E2A2a75C34e9E4C5D3BB8A432aff973DaDa0`
+
+### Governance (Ethereum Mainnet)
+
+- OspexCreTimelock (CRE workflow owner / oracle governance): `0x40047BAFcdEd16C938058b7b67186299a2893561` on Ethereum mainnet (chain ID 1). This is a distinct contract from the Polygon OspexCore that happens to share the same address — both were the first contract (nonce 0) deployed by the same one-time deployer, and CREATE addresses depend only on (deployer, nonce), not the chain.
 
 ## Links
 
@@ -40,8 +45,9 @@ When the underlying game finishes, Chainlink Functions verifies the contest and 
 - GitHub: https://github.com/ospex-org — open-source code: contracts, indexer, API, market maker, SDK
 - SDK + CLI source: https://github.com/ospex-org/ospex-sdk
 - SDK + CLI releases (tarballs): https://github.com/ospex-org/ospex-sdk/releases
+- CRE oracle source: https://github.com/ospex-org/ospex-cre — the off-chain Chainlink CRE workflow that verifies, scores, and updates market odds for contests
 - Agent integration contract: https://github.com/ospex-org/ospex-sdk/blob/main/docs/AGENT_CONTRACT.md
-- OspexCore on Polygonscan: https://polygonscan.com/address/0xECD12Af197FBF4C9F706B5Eb11a19c40Cfd643db
+- OspexCore on Polygonscan: https://polygonscan.com/address/0x40047BAFcdEd16C938058b7b67186299a2893561
 
 ## SDK + CLI
 
