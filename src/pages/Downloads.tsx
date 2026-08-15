@@ -3,7 +3,7 @@ import { Check, Copy } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import { cn } from "@/lib/utils";
 
-const VERSION = "0.12.0";
+const VERSION = "0.13.0";
 const RELEASE_BASE = `https://github.com/ospex-org/ospex-sdk/releases/download/v${VERSION}`;
 
 type Tarball = {
@@ -42,7 +42,11 @@ type InstallTab = {
 };
 
 const installTabs: InstallTab[] = [
-  { id: "npm", label: "npm", command: "npm install -g" },
+  // npm 12+ ships allow-remote=none, refusing remote-tarball installs
+  // (EALLOWREMOTE) — --allow-remote=root scopes the allowance to just this
+  // tarball, which is safe because the bundled CLI declares zero
+  // dependencies. Older npm ignores the flag with a warning and installs.
+  { id: "npm", label: "npm", command: "npm install -g --allow-remote=root" },
   { id: "yarn", label: "yarn", command: "yarn global add" },
 ];
 
@@ -153,7 +157,10 @@ export default function Downloads() {
           </div>
           <p className="text-sm text-muted-foreground mt-3">
             One global install, nothing else to resolve — every dependency is inlined into
-            the bundle, so there's no second tarball to add and no registry lookup.
+            the bundle, so there's no second tarball to add and no registry lookup. The{" "}
+            <code className="font-mono text-xs">--allow-remote=root</code> flag is for npm 12+,
+            which blocks remote-tarball installs by default; it allows just this tarball, and
+            older npm versions ignore it (with a warning) and install fine.
           </p>
           <p className="text-sm text-muted-foreground mt-2">
             Writing code against{" "}
