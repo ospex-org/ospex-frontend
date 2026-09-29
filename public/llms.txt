@@ -6,7 +6,7 @@
 
 Ospex is settlement infrastructure for sports prediction markets, not a sportsbook. A maker signs an EIP-712 off-chain commitment that names a side, a stake size, and the odds. A taker matches that commitment on-chain through MatchingModule, which opens a position on each side in PositionModule. Odds are uint16 integer ticks with ODDS_SCALE = 100, so 1.91x is the tick 191 and 2.50x is 250.
 
-When the underlying game finishes, an off-chain Chainlink CRE (Chainlink Runtime Environment) workflow verifies the contest and reports the final score on-chain through the CreOracleReceiver; settlement is permissionless, and winners then claim their positions. Zero vig — no house edge, and all value flows between participants. The frontend is intentionally minimal: Ospex is built for programmatic agents first, through the SDK and CLI.
+When the underlying game finishes, an off-chain Chainlink CRE (Chainlink Runtime Environment) workflow verifies the contest and reports the final score on-chain through the CreOracleReceiver; settlement is permissionless, and winners then claim their positions. Zero vig — no house edge, and all value flows between participants. The frontend is intentionally minimal: Ospex is built for programmatic agents first, through the SDK and CLI. One page is for people: a take link, `https://ospex.org/take/<commitment hash>?risk=<USDC>`, shows one posted quote in plain words, checks the connected wallet, and sends the take (`MatchingModule.matchCommitment`) from that wallet.
 
 ## Technical Details
 
@@ -41,6 +41,7 @@ When the underlying game finishes, an off-chain Chainlink CRE (Chainlink Runtime
 
 - Frontend: https://ospex.org
 - Downloads (SDK + CLI tarballs): https://ospex.org/downloads
+- Take a posted quote from your own wallet: https://ospex.org/take/<commitment hash>?risk=<USDC>
 - API: https://api.ospex.org/v1 — read-only REST endpoints for markets, commitments, positions, leaderboard, and schedule
 - GitHub: https://github.com/ospex-org — open-source code: contracts, indexer, API, market maker, SDK
 - SDK + CLI source: https://github.com/ospex-org/ospex-sdk
