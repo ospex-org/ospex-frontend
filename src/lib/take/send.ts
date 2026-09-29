@@ -2,17 +2,20 @@
  * Sending a take, and following it until Ospex has recorded the fill.
  *
  * `prepareAndSend` follows `@ospex/sdk`'s `matchFromPreview`, which re-reads
- * everything before it sends, however recent the preview: the quote and the
- * game are fetched again and put through the same checks as the preview, the
- * amounts must be the ones the person was shown, and the wallet's chain,
- * address, USDC and approval are read again. Then the transaction is run as a
- * call, so a take the chain would refuse at that moment is refused here in
- * words instead of costing gas, and its gas is estimated with the SDK's 10%
- * cushion.
+ * everything before it sends, however recent the preview. The wallet's chain,
+ * address, USDC and approval are read again; the transaction is run as a call,
+ * so a take the chain would refuse at that moment is refused here in words
+ * instead of costing gas; and its gas is estimated with the SDK's 10% cushion.
  *
- * Only then does the wallet see it. `from` is set, so ethers will not send it
- * from any other account, and `chainId` is set for the wallet to check against
- * the network it is on.
+ * Then, as the last step before the wallet sees it, the quote and the game are
+ * fetched again and put through the same checks as the preview, against the
+ * clock as it reads after every one of those awaits, and the amounts must still
+ * be the ones the person was shown. A read that is slow, or a clock that
+ * crosses the start while the wallet is being read, is caught there rather than
+ * at the top.
+ *
+ * `from` is set, so ethers will not send it from any other account, and
+ * `chainId` is set for the wallet to check against the network it is on.
  */
 
 import { ethers } from "ethers";
@@ -35,12 +38,16 @@ const NOTHING_SENT = "Nothing was sent.";
 
 export type Refusal = { ok: false; lines: string[]; view?: TakeView };
 
-/** Fetch the quote and its game again, and assess them as the preview did. */
+/**
+ * Fetch the quote and its game again, and assess them as the preview did, at
+ * the clock's reading once both have arrived. `checkedAt` is that reading.
+ */
 export async function reassess(
   hash: string,
   contestId: string,
   requestedRisk: bigint,
-): Promise<{ ok: true; view: TakeView } | Refusal> {
+  now: () => number = Date.now,
+): Promise<{ ok: true; view: TakeView; checkedAt: number } | Refusal> {
   const [quoteRead, contestRead] = await Promise.all([getCommitment(hash), getContest(contestId)]);
   if (!quoteRead.ok) return { ok: false, lines: [`The quote could not be read again. ${quoteRead.message}`, NOTHING_SENT] };
   if (!contestRead.ok) return { ok: false, lines: [`The game could not be read again. ${contestRead.message}`, NOTHING_SENT] };
@@ -49,9 +56,10 @@ export async function reassess(
   if (read.kind === "bad") return { ok: false, lines: [read.reason] };
   const contest = readContest(contestRead.body);
   if (contest === null) return { ok: false, lines: ["Ospex returned this game in a form this page cannot read.", NOTHING_SENT] };
-  const assessment = assessTake({ quote: read.quote, contest, requestedRisk, nowMs: Date.now() });
+  const checkedAt = now();
+  const assessment = assessTake({ quote: read.quote, contest, requestedRisk, nowMs: checkedAt });
   if (!assessment.ok) return { ok: false, lines: [...assessment.lines, NOTHING_SENT] };
-  return { ok: true, view: assessment.view };
+  return { ok: true, view: assessment.view, checkedAt };
 }
 
 function refusalFromError(err: unknown, lead: string): string[] {
@@ -62,10 +70,11 @@ function refusalFromError(err: unknown, lead: string): string[] {
 }
 
 /**
- * Check the quote, the game and the wallet again, run the take as a call, and
- * hand it to the wallet. Resolves once the wallet has sent it, with its hash,
- * or with the reason it was not sent. A refusal carrying a `view` means the
- * quote changed: that view is the new preview, to be confirmed again.
+ * Check the wallet again, run the take as a call, estimate its gas, then check
+ * the quote, the game and the clock one last time and hand it to the wallet.
+ * Resolves once the wallet has sent it, with its hash, or with the reason it
+ * was not sent. A refusal carrying a `view` means the quote changed: that view
+ * is the new preview, to be confirmed again.
  */
 export async function prepareAndSend(args: {
   shown: TakeView;
@@ -75,20 +84,15 @@ export async function prepareAndSend(args: {
   signer: ethers.providers.JsonRpcSigner;
   /** Called just before the wallet is asked to confirm. */
   onWallet: () => void;
+  /** The clock. A test passes one it can move. */
+  now?: () => number;
 }): Promise<{ ok: true; hash: string; startBlock: number } | Refusal> {
   const { shown, requestedRisk, provider, signer, onWallet } = args;
+  const now = args.now ?? Date.now;
   const taker = args.taker.toLowerCase();
-
-  const fresh = await reassess(shown.quote.hash, shown.quote.commitment.contestId, requestedRisk);
-  if (!fresh.ok) return fresh;
-  if (!sameTake(shown, fresh.view)) {
-    return {
-      ok: false,
-      lines: ["The quote changed since this page showed it. Check the amounts again, then confirm.", NOTHING_SENT],
-      view: fresh.view,
-    };
-  }
-  const view = fresh.view;
+  // Everything before the last check works from the take the person was
+  // shown. The last check refuses if the quote no longer gives those amounts.
+  const view = shown;
 
   let signerAddress: string;
   try {
@@ -133,6 +137,19 @@ export async function prepareAndSend(args: {
     startBlock = await provider.getBlockNumber();
   } catch (err) {
     return { ok: false, lines: refusalFromError(err, "The network fee could not be worked out") };
+  }
+
+  // The last check, after every await above and as the final step before the
+  // wallet: the quote and the game read again and judged against the clock as
+  // it is now. The signed expiry is never touched.
+  const fresh = await reassess(view.quote.hash, view.quote.commitment.contestId, requestedRisk, now);
+  if (!fresh.ok) return fresh;
+  if (!sameTake(view, fresh.view)) {
+    return {
+      ok: false,
+      lines: ["The quote changed since this page showed it. Check the amounts again, then confirm.", NOTHING_SENT],
+      view: fresh.view,
+    };
   }
 
   onWallet();
