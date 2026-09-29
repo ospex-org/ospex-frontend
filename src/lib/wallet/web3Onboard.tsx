@@ -12,6 +12,10 @@ type Web3ContextType = {
   connectWallet: () => Promise<void>;
   disconnectWallet: () => Promise<void>;
   chainId: number | null;
+  /** The chain the wallet reports, even when it is not Polygon (when `provider` is null). */
+  walletChainId: number | null;
+  /** Ask the wallet to switch to Polygon, adding the network first if it does not know it. */
+  switchToPolygon: () => Promise<void>;
 };
 
 const defaultValue: Web3ContextType = {
@@ -22,6 +26,8 @@ const defaultValue: Web3ContextType = {
   connectWallet: async () => {},
   disconnectWallet: async () => {},
   chainId: null,
+  walletChainId: null,
+  switchToPolygon: async () => {},
 };
 
 const Web3Context = createContext<Web3ContextType>(defaultValue);
@@ -70,6 +76,37 @@ if (isClient) {
   });
 }
 
+type Eip1193 = { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
+
+async function requestPolygon(eip1193: Eip1193): Promise<void> {
+  try {
+    await eip1193.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: POLYGON_MAINNET.chainIdHex }],
+    });
+  } catch (switchError: unknown) {
+    const err = switchError as { code?: number };
+    if (err.code === 4902) {
+      await eip1193.request({
+        method: "wallet_addEthereumChain",
+        params: [
+          {
+            chainId: POLYGON_MAINNET.chainIdHex,
+            chainName: POLYGON_MAINNET.name,
+            nativeCurrency: {
+              name: "POL",
+              symbol: POLYGON_MAINNET.token,
+              decimals: 18,
+            },
+            rpcUrls: [POLYGON_MAINNET.rpcUrl],
+            blockExplorerUrls: [POLYGON_MAINNET.blockExplorerUrl],
+          },
+        ],
+      });
+    }
+  }
+}
+
 function ServerProvider({ children }: { children: ReactNode }) {
   return <Web3Context.Provider value={defaultValue}>{children}</Web3Context.Provider>;
 }
@@ -79,6 +116,7 @@ function ClientProvider({ children }: { children: ReactNode }) {
   const [provider, setProvider] = useState<ethers.providers.Web3Provider | null>(null);
   const [signer, setSigner] = useState<ethers.providers.JsonRpcSigner | null>(null);
   const [chainId, setChainId] = useState<number | null>(null);
+  const [walletChainId, setWalletChainId] = useState<number | null>(null);
 
   useEffect(() => {
     const setup = async () => {
@@ -86,40 +124,17 @@ function ClientProvider({ children }: { children: ReactNode }) {
         setProvider(null);
         setSigner(null);
         setChainId(null);
+        setWalletChainId(null);
         return;
       }
 
       try {
         const currentChainId = (await wallet.provider.request({ method: "eth_chainId" })) as string;
         const currentChainIdNum = parseInt(currentChainId, 16);
+        setWalletChainId(currentChainIdNum);
 
         if (currentChainIdNum !== POLYGON_MAINNET.chainId) {
-          try {
-            await wallet.provider.request({
-              method: "wallet_switchEthereumChain",
-              params: [{ chainId: POLYGON_MAINNET.chainIdHex }],
-            });
-          } catch (switchError: unknown) {
-            const err = switchError as { code?: number };
-            if (err.code === 4902) {
-              await wallet.provider.request({
-                method: "wallet_addEthereumChain",
-                params: [
-                  {
-                    chainId: POLYGON_MAINNET.chainIdHex,
-                    chainName: POLYGON_MAINNET.name,
-                    nativeCurrency: {
-                      name: "POL",
-                      symbol: POLYGON_MAINNET.token,
-                      decimals: 18,
-                    },
-                    rpcUrls: [POLYGON_MAINNET.rpcUrl],
-                    blockExplorerUrls: [POLYGON_MAINNET.blockExplorerUrl],
-                  },
-                ],
-              });
-            }
-          }
+          await requestPolygon(wallet.provider);
         }
 
         const p = new ethers.providers.Web3Provider(wallet.provider, POLYGON_MAINNET);
@@ -159,6 +174,10 @@ function ClientProvider({ children }: { children: ReactNode }) {
       if (wallet) await disconnect(wallet);
     },
     chainId,
+    walletChainId,
+    switchToPolygon: async () => {
+      if (wallet?.provider) await requestPolygon(wallet.provider);
+    },
   };
 
   return <Web3Context.Provider value={ctx}>{children}</Web3Context.Provider>;
