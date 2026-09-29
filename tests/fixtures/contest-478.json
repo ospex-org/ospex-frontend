@@ -1,0 +1,36 @@
+{
+  "contestId": "478",
+  "awayTeam": "Indianapolis Colts",
+  "homeTeam": "Washington Commanders",
+  "sport": "nfl",
+  "matchTime": "2026-10-04T13:30:00+00:00",
+  "chainStartTime": "2026-10-04T13:30:00+00:00",
+  "status": "verified",
+  "awayScore": null,
+  "homeScore": null,
+  "verifiedAt": "2026-09-28T23:56:14+00:00",
+  "speculations": [
+    {
+      "speculationId": "993",
+      "contestId": "478",
+      "type": "moneyline",
+      "lineTicks": 0,
+      "line": null,
+      "speculationStatus": 0,
+      "winSide": null,
+      "settledAt": null,
+      "voided": false
+    },
+    {
+      "speculationId": "994",
+      "contestId": "478",
+      "type": "total",
+      "lineTicks": 470,
+      "line": 47,
+      "speculationStatus": 0,
+      "winSide": null,
+      "settledAt": null,
+      "voided": false
+    }
+  ]
+}
