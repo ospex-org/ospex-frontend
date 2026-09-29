@@ -16,10 +16,28 @@
  *
  * `from` is set, so ethers will not send it from any other account, and
  * `chainId` is set for the wallet to check against the network it is on.
+ *
+ * Every take is an attempt with a record (`attempts.ts`), written before the
+ * wallet is asked and again at each change. An attempt whose outcome is not
+ * known blocks the next one until its fill is found; `followAttempt` takes one
+ * step towards knowing it, whether the attempt began on this page or before a
+ * reload.
  */
 
 import { ethers } from "ethers";
 import { getCommitment, getContest, getFills, type Fill } from "./api";
+import {
+  IN_FLIGHT,
+  PAGE_STOPPED,
+  fillOf,
+  handoff,
+  openAttempt,
+  recorded,
+  update,
+  walletError,
+  type Attempt,
+  type AttemptStore,
+} from "./attempts";
 import { MATCHING_MODULE, POLYGON_CHAIN_ID, USDC } from "./constants";
 import { readWallet, walletProblems, walletReads } from "./checks";
 import { assessTake, readContest, readQuote, sameTake, type TakeView } from "./quote";
@@ -41,16 +59,29 @@ export type Refusal = { ok: false; lines: string[]; view?: TakeView };
 /**
  * Fetch the quote and its game again, and assess them as the preview did, at
  * the clock's reading once both have arrived. `checkedAt` is that reading.
+ * The taker's fills on the quote are read in the same round, so an attempt can
+ * tell its own fill from one that was already there.
  */
 export async function reassess(
   hash: string,
   contestId: string,
   requestedRisk: bigint,
+  taker: string,
   now: () => number = Date.now,
-): Promise<{ ok: true; view: TakeView; checkedAt: number } | Refusal> {
-  const [quoteRead, contestRead] = await Promise.all([getCommitment(hash), getContest(contestId)]);
+): Promise<{ ok: true; view: TakeView; checkedAt: number; knownFills: string[] } | Refusal> {
+  const [quoteRead, contestRead, fills] = await Promise.all([
+    getCommitment(hash),
+    getContest(contestId),
+    getFills(hash, taker.toLowerCase()),
+  ]);
   if (!quoteRead.ok) return { ok: false, lines: [`The quote could not be read again. ${quoteRead.message}`, NOTHING_SENT] };
   if (!contestRead.ok) return { ok: false, lines: [`The game could not be read again. ${contestRead.message}`, NOTHING_SENT] };
+  if (fills === null) {
+    return {
+      ok: false,
+      lines: ["Ospex's list of fills could not be read, so the page could not keep track of this bet.", NOTHING_SENT],
+    };
+  }
   const read = readQuote(quoteRead.body, hash);
   if (read.kind === "withdrawn") return { ok: false, lines: ["The maker has withdrawn this quote.", NOTHING_SENT] };
   if (read.kind === "bad") return { ok: false, lines: [read.reason] };
@@ -59,7 +90,7 @@ export async function reassess(
   const checkedAt = now();
   const assessment = assessTake({ quote: read.quote, contest, requestedRisk, nowMs: checkedAt });
   if (!assessment.ok) return { ok: false, lines: [...assessment.lines, NOTHING_SENT] };
-  return { ok: true, view: assessment.view, checkedAt };
+  return { ok: true, view: assessment.view, checkedAt, knownFills: fills.map((fill) => fill.txHash) };
 }
 
 function refusalFromError(err: unknown, lead: string): string[] {
@@ -69,12 +100,25 @@ function refusalFromError(err: unknown, lead: string): string[] {
   return [`${lead} (${shortReason(err)}).`, NOTHING_SENT];
 }
 
+export type SendResult =
+  /** The wallet sent it and returned its hash. */
+  | { kind: "sent"; attempt: Attempt }
+  /** The wallet was asked and answered with an error: the take may be in flight. */
+  | { kind: "unknown"; attempt: Attempt }
+  /** Nothing was sent. A `view` means the quote changed: that view is the new preview. */
+  | { kind: "refused"; lines: string[]; view?: TakeView };
+
+function refused(from: Refusal): SendResult {
+  return from.view === undefined ? { kind: "refused", lines: from.lines } : { kind: "refused", lines: from.lines, view: from.view };
+}
+
 /**
  * Check the wallet again, run the take as a call, estimate its gas, then check
- * the quote, the game and the clock one last time and hand it to the wallet.
- * Resolves once the wallet has sent it, with its hash, or with the reason it
- * was not sent. A refusal carrying a `view` means the quote changed: that view
- * is the new preview, to be confirmed again.
+ * the quote, the game and the clock one last time, write the attempt down, and
+ * hand it to the wallet. Resolves once the wallet has answered.
+ *
+ * An unresolved attempt on this quote from this wallet, from this page or from
+ * before a reload, refuses at once: its transaction may be in flight.
  */
 export async function prepareAndSend(args: {
   shown: TakeView;
@@ -82,17 +126,27 @@ export async function prepareAndSend(args: {
   taker: string;
   provider: ethers.providers.Web3Provider;
   signer: ethers.providers.JsonRpcSigner;
+  attempts: AttemptStore;
   /** Called just before the wallet is asked to confirm. */
   onWallet: () => void;
   /** The clock. A test passes one it can move. */
   now?: () => number;
-}): Promise<{ ok: true; hash: string; startBlock: number } | Refusal> {
-  const { shown, requestedRisk, provider, signer, onWallet } = args;
+}): Promise<SendResult> {
+  const result = await prepare(args);
+  return "kind" in result ? result : refused(result);
+}
+
+async function prepare(args: Parameters<typeof prepareAndSend>[0]): Promise<SendResult | Refusal> {
+  const { shown, requestedRisk, provider, signer, onWallet, attempts } = args;
   const now = args.now ?? Date.now;
   const taker = args.taker.toLowerCase();
   // Everything before the last check works from the take the person was
   // shown. The last check refuses if the quote no longer gives those amounts.
   const view = shown;
+
+  if (openAttempt(attempts, view.quote.hash, taker) !== null) {
+    return { ok: false, lines: [IN_FLIGHT] };
+  }
 
   let signerAddress: string;
   try {
@@ -142,7 +196,7 @@ export async function prepareAndSend(args: {
   // The last check, after every await above and as the final step before the
   // wallet: the quote and the game read again and judged against the clock as
   // it is now. The signed expiry is never touched.
-  const fresh = await reassess(view.quote.hash, view.quote.commitment.contestId, requestedRisk, now);
+  const fresh = await reassess(view.quote.hash, view.quote.commitment.contestId, requestedRisk, taker, now);
   if (!fresh.ok) return fresh;
   if (!sameTake(view, fresh.view)) {
     return {
@@ -152,30 +206,60 @@ export async function prepareAndSend(args: {
     };
   }
 
-  onWallet();
-  try {
-    const hash = await signer.sendUncheckedTransaction({ ...request, gasLimit, chainId: POLYGON_CHAIN_ID });
-    return { ok: true, hash: hash.toLowerCase(), startBlock };
-  } catch (err) {
-    if (isUserRejection(err)) return { ok: false, lines: ["You declined in your wallet.", NOTHING_SENT] };
+  // Written before the wallet is asked, so that a reload from here on finds it.
+  let attempt = handoff({
+    quote: view.quote.hash,
+    taker,
+    takerDesiredRisk: view.plan.takerDesiredRisk,
+    takerRisk: view.plan.takerRisk,
+    fillMakerRisk: view.plan.fillMakerRisk,
+    startMs: fresh.view.startMs,
+    startBlock,
+    knownFills: fresh.knownFills,
+    lastCheckAt: fresh.checkedAt,
+    handoffAt: now(),
+  });
+  if (!attempts.save(attempt)) {
     return {
       ok: false,
       lines: [
-        `Your wallet reported an error (${shortReason(err)}).`,
-        "If your wallet shows a pending transaction, wait for it before trying again.",
+        "This browser would not let the page keep a record of the bet, so it has not sent one. " +
+          "Allow this site to store data, then reload.",
       ],
     };
+  }
+
+  onWallet();
+  try {
+    const hash = await signer.sendUncheckedTransaction({ ...request, gasLimit, chainId: POLYGON_CHAIN_ID });
+    attempt = update(attempt, { status: "sent", hash: hash.toLowerCase(), sentAt: now() }, now());
+    attempts.save(attempt);
+    return { kind: "sent", attempt };
+  } catch (err) {
+    if (isUserRejection(err)) {
+      attempts.save(update(attempt, { status: "declined" }, now()));
+      return { ok: false, lines: ["You declined in your wallet.", NOTHING_SENT] };
+    }
+    // Anything else leaves the outcome open: the wallet may have sent it and
+    // lost the answer. The attempt stays unresolved until its fill is found.
+    attempt = update(attempt, { status: "unknown", note: walletError(shortReason(err)) }, now());
+    attempts.save(attempt);
+    return { kind: "unknown", attempt };
   }
 }
 
 export type Mined =
   | { status: "confirmed"; hash: string; blockNumber: number; matched: MatchedEvent | null }
-  | { status: "failed"; hash: string; lines: string[] };
+  /** Definitely not placed: mined and reverted, or replaced by the wallet with something else. */
+  | { status: "failed"; hash: string; lines: string[] }
+  /** Not followed to an end: the transaction may still be mined. */
+  | { status: "lost"; hash: string; lines: string[] };
 
 /**
  * Wait for a sent transaction to be mined. A transaction the wallet sped up
  * (same call, higher fee) is followed to its replacement; one it cancelled or
- * replaced with something else is reported as not placed.
+ * replaced with something else is reported as not placed. One that cannot be
+ * followed is reported as lost, not failed: it may still be mined.
  */
 export async function waitForMined(args: {
   provider: ethers.providers.Web3Provider;
@@ -195,7 +279,7 @@ export async function waitForMined(args: {
   }
   if (tx === null) {
     return {
-      status: "failed",
+      status: "lost",
       hash,
       lines: ["Your wallet sent the transaction, but Polygon has not shown it for two minutes. Check it on Polygonscan."],
     };
@@ -226,7 +310,7 @@ export async function waitForMined(args: {
     if (e.code === ethers.errors.CALL_EXCEPTION && e.receipt !== undefined) {
       return failedOnChain(e.receipt.transactionHash);
     }
-    return { status: "failed", hash, lines: [`Waiting for the transaction failed (${shortReason(err)}). Check it on Polygonscan.`] };
+    return { status: "lost", hash, lines: [`Waiting for the transaction failed (${shortReason(err)}). Check it on Polygonscan.`] };
   }
 }
 
@@ -248,24 +332,80 @@ function failedOnChain(hash: string): Mined {
 }
 
 /**
- * Ask the API for the fill this transaction made, every three seconds for up
- * to three minutes. It appears once its block is final, usually within about
- * fifteen seconds of confirming.
+ * Take one step towards knowing how an unresolved attempt ended, save the
+ * attempt if the step changed it, and return it.
+ *
+ *   handoff    only a reload finds one, so the page stopped while the wallet was
+ *              asking: the attempt becomes unknown
+ *   sent       follow the transaction until it is mined (needs the wallet)
+ *   confirmed  look for its fill, under its hash
+ *   unknown    look for its fill: under its hash if it has one, otherwise a fill
+ *              from this wallet on this quote that was not there at the handoff
+ *
+ * A fill appears once its block is final, usually within about fifteen seconds
+ * of confirming, so the API is asked every three seconds for up to three
+ * minutes. An attempt returned unchanged is still open.
  */
-export async function waitForFill(args: {
-  commitmentHash: string;
-  taker: string;
-  txHash: string;
-  isCancelled: () => boolean;
-}): Promise<Fill | null> {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (args.isCancelled()) return null;
-    const fills = await getFills(args.commitmentHash, args.taker.toLowerCase());
-    const fill = fills?.find((candidate) => candidate.txHash === args.txHash.toLowerCase());
-    if (fill !== undefined) return fill;
-    await sleep(3_000);
+export async function followAttempt(
+  attempt: Attempt,
+  deps: {
+    store: AttemptStore;
+    provider: ethers.providers.Web3Provider | null;
+    isCancelled: () => boolean;
+    now?: () => number;
+    fills?: (quote: string, taker: string) => Promise<Fill[] | null>;
+    tries?: number;
+    intervalMs?: number;
+  },
+): Promise<Attempt> {
+  const now = deps.now ?? Date.now;
+  const save = (next: Attempt): Attempt => {
+    deps.store.save(next);
+    return next;
+  };
+
+  if (attempt.status === "handoff") {
+    return save(update(attempt, { status: "unknown", note: PAGE_STOPPED }, now()));
   }
-  return null;
+
+  if (attempt.status === "sent") {
+    if (deps.provider === null || attempt.hash === null) return attempt;
+    const mined = await waitForMined({
+      provider: deps.provider,
+      hash: attempt.hash,
+      startBlock: attempt.startBlock,
+      commitmentHash: attempt.quote,
+    });
+    if (deps.isCancelled()) return attempt;
+    if (mined.status === "confirmed") {
+      const matched =
+        mined.matched === null
+          ? null
+          : {
+              takerRisk: mined.matched.takerRisk.toString(),
+              makerRisk: mined.matched.makerRisk.toString(),
+              oddsTick: mined.matched.oddsTick,
+            };
+      return save(update(attempt, { status: "confirmed", hash: mined.hash, blockNumber: mined.blockNumber, matched }, now()));
+    }
+    if (mined.status === "failed") {
+      return save(update(attempt, { status: "failed", hash: mined.hash, note: mined.lines.join(" ") }, now()));
+    }
+    return save(update(attempt, { status: "unknown", note: mined.lines.join(" ") }, now()));
+  }
+
+  if (attempt.status === "confirmed" || attempt.status === "unknown") {
+    const read = deps.fills ?? getFills;
+    const tries = deps.tries ?? 60;
+    for (let round = 0; round < tries; round += 1) {
+      if (deps.isCancelled()) return attempt;
+      const fills = await read(attempt.quote, attempt.taker);
+      const fill = fills === null ? null : fillOf(attempt, fills);
+      if (fill !== null) return save(recorded(attempt, fill, now()));
+      if (round + 1 < tries) await sleep(deps.intervalMs ?? 3_000);
+    }
+  }
+  return attempt;
 }
 
 /** Ask the wallet to approve the PositionModule for `amount` of USDC. Resolves with the hash once sent. */

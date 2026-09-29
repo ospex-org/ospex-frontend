@@ -1,16 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { AppHeader } from "@/components/AppHeader";
 import { Button } from "@/components/ui/button";
 import { useWeb3 } from "@/lib/wallet/web3Onboard";
 import { getCommitment, getContest, getFills, type Fill } from "@/lib/take/api";
+import {
+  IN_FLIGHT,
+  attemptStore,
+  browserStorage,
+  isResolved,
+  openAttempt,
+  type Attempt,
+} from "@/lib/take/attempts";
 import { readWallet, walletProblems, walletReads, type Problem } from "@/lib/take/checks";
 import { POLYGONSCAN_TX_URL, POLYGON_CHAIN_ID } from "@/lib/take/constants";
 import { hasInjectedWallet, metamaskDappLink } from "@/lib/take/deeplink";
 import { formatOddsTick, formatUsdcExact, parseUsdc, takerOddsTick } from "@/lib/take/math";
 import { assessTake, readContest, readQuote, type TakeView } from "@/lib/take/quote";
-import { prepareAndSend, sendApprove, waitForFill, waitForMined } from "@/lib/take/send";
-import type { MatchedEvent } from "@/lib/take/tx";
+import { followAttempt, prepareAndSend, sendApprove, waitForMined } from "@/lib/take/send";
 import { formatEasternMs, parseTimestampMs } from "@/lib/take/words";
 
 type Load = { status: "loading" } | { status: "refused"; lines: string[] } | { status: "ready"; view: TakeView };
@@ -21,15 +28,8 @@ type Checks =
   | { status: "done"; problems: Problem[]; usdc: bigint; earlier: Fill[] }
   | { status: "error"; message: string };
 
-/** Once a take is sent, the page follows it and offers no second one; reloading starts afresh. */
-type Sent =
-  | { status: "sent"; hash: string }
-  | { status: "confirmed"; hash: string; blockNumber: number; matched: MatchedEvent | null }
-  | { status: "recorded"; hash: string; matched: MatchedEvent | null; fill: Fill }
-  | { status: "unrecorded"; hash: string; matched: MatchedEvent | null }
-  | { status: "failed"; hash: string; lines: string[] };
-
-type Action = { status: "idle" } | { status: "checking" } | { status: "wallet" } | { status: "refused"; lines: string[] } | Sent;
+/** Before the wallet is handed a take. From the handoff on, the attempt's record says where it stands. */
+type Action = { status: "idle" } | { status: "checking" } | { status: "wallet" } | { status: "refused"; lines: string[] };
 
 type Approval = { status: "idle" } | { status: "wallet" } | { status: "sent"; hash: string } | { status: "failed"; lines: string[] };
 
@@ -37,16 +37,6 @@ const HASH = /^0x[0-9a-fA-F]{64}$/;
 
 const panel = "rounded-lg bg-secondary/30 p-4 text-sm space-y-1";
 const primary = "bg-foreground text-background hover:bg-foreground/90";
-
-function isSent(action: Action): action is Sent {
-  return (
-    action.status === "sent" ||
-    action.status === "confirmed" ||
-    action.status === "recorded" ||
-    action.status === "unrecorded" ||
-    action.status === "failed"
-  );
-}
 
 function readLink(
   hash: string | undefined,
@@ -95,9 +85,9 @@ function when(timestamp: string): string {
   return (ms === null ? null : formatEasternMs(ms, true)) ?? timestamp;
 }
 
-function amounts(fill: { takerRisk: bigint; makerRisk: bigint; oddsTick: number }): string {
+function amounts(fill: { takerRisk: bigint | string; makerRisk: bigint | string; oddsTick: number }): string {
   return (
-    `You risked ${formatUsdcExact(fill.takerRisk)} USDC to win ${formatUsdcExact(fill.makerRisk)} USDC ` +
+    `You risked ${formatUsdcExact(BigInt(fill.takerRisk))} USDC to win ${formatUsdcExact(BigInt(fill.makerRisk))} USDC ` +
     `at ${formatOddsTick(takerOddsTick(fill.oddsTick))}.`
   );
 }
@@ -127,39 +117,74 @@ function TxLink({ hash }: { hash: string }) {
   );
 }
 
-function SentPanel({ sent }: { sent: Sent }) {
+/**
+ * Where a handed-off take stands, from its record. While its outcome is not
+ * known, the page says so, looks for its fill, and offers no take.
+ */
+function AttemptPanel({ attempt, following, onCheckAgain }: { attempt: Attempt; following: boolean; onCheckAgain: () => void }) {
+  const { status } = attempt;
+  const open = status === "handoff" || status === "unknown";
   return (
-    <section aria-label="result" className={panel}>
-      <p>
-        Transaction: <TxLink hash={sent.hash} />
-      </p>
-      {sent.status === "sent" && <p className="text-muted-foreground">Sent. Waiting for Polygon to confirm it…</p>}
-      {sent.status === "failed" && (
+    <section aria-label="your take" className={panel}>
+      {open && <p className="font-medium leading-relaxed">{IN_FLIGHT}</p>}
+      {attempt.hash !== null && (
+        <p>
+          Transaction: <TxLink hash={attempt.hash} />
+        </p>
+      )}
+      {status === "sent" && <p className="text-muted-foreground">Sent. Waiting for Polygon to confirm it…</p>}
+      {status === "confirmed" && (
         <>
-          <Lines lines={sent.lines} />
+          <p className="font-medium">Confirmed on Polygon.</p>
+          {attempt.matched !== null && <p>{amounts(attempt.matched)}</p>}
+          <p className="text-muted-foreground">
+            {following
+              ? `In block ${String(attempt.blockNumber)}. Waiting for Ospex to record the fill…`
+              : "Ospex has not listed the fill yet. It usually takes about fifteen seconds."}
+          </p>
+        </>
+      )}
+      {status === "recorded" && attempt.fill !== null && (
+        <>
+          <p className="font-medium">Filled.</p>
+          <p>{amounts(attempt.fill)}</p>
+          <p className="text-muted-foreground">
+            Ospex recorded the fill at {when(attempt.fill.filledAt)}. Ask the assistant that gave you this link whether it
+            filled, and it will find it.
+          </p>
+        </>
+      )}
+      {status === "failed" && (
+        <>
+          {attempt.note !== null && <p>{attempt.note}</p>}
           <p className="text-muted-foreground">Reload this page to check the quote again.</p>
         </>
       )}
-      {(sent.status === "confirmed" || sent.status === "recorded" || sent.status === "unrecorded") && (
+      {open && (
         <>
-          <p className="font-medium">{sent.status === "recorded" ? "Filled." : "Confirmed on Polygon."}</p>
-          {sent.matched !== null && <p>{amounts(sent.matched)}</p>}
-          {sent.matched === null && sent.status === "recorded" && <p>{amounts(sent.fill)}</p>}
+          {attempt.note !== null && <p className="text-muted-foreground">{attempt.note}</p>}
+          <p className="text-muted-foreground">
+            {following
+              ? "Looking for this bet among Ospex's fills from your wallet on this quote…"
+              : "Ospex lists no fill from your wallet on this quote since then."}
+          </p>
         </>
       )}
-      {sent.status === "confirmed" && (
-        <p className="text-muted-foreground">In block {String(sent.blockNumber)}. Waiting for Ospex to record the fill…</p>
+      {(open || status === "confirmed") && !following && (
+        <button
+          type="button"
+          onClick={onCheckAgain}
+          className="block text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          Check again
+        </button>
       )}
-      {sent.status === "recorded" && (
-        <p className="text-muted-foreground">
-          Ospex recorded the fill at {when(sent.fill.filledAt)}. Ask the assistant that gave you this link whether it
-          filled, and it will find it.
-        </p>
-      )}
-      {sent.status === "unrecorded" && (
-        <p className="text-muted-foreground">
-          Ospex has not listed the fill yet. It usually takes about fifteen seconds; ask again in a minute.
-        </p>
+      {open && (
+        <div className="pt-2">
+          <Button className={primary} disabled>
+            Take this bet
+          </Button>
+        </div>
       )}
     </section>
   );
@@ -174,9 +199,13 @@ export default function Take() {
 
   const { isConnected, address, provider, signer, connectWallet, walletChainId, switchToPolygon } = useWeb3();
 
+  const store = useMemo(() => attemptStore(browserStorage()), []);
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [checks, setChecks] = useState<Checks>({ status: "idle" });
   const [action, setAction] = useState<Action>({ status: "idle" });
+  const [attempt, setAttempt] = useState<Attempt | null>(null);
+  const [following, setFollowing] = useState(false);
+  const [followRound, setFollowRound] = useState(0);
   const [approval, setApproval] = useState<Approval>({ status: "idle" });
   const [checkRound, setCheckRound] = useState(0);
   const alive = useRef(true);
@@ -238,46 +267,56 @@ export default function Take() {
 
   const recheck = useCallback(() => setCheckRound((round) => round + 1), []);
 
+  // An unresolved attempt on this quote from this wallet, found in the
+  // browser's record, from before a reload or from another tab.
+  useEffect(() => {
+    setAttempt(linkHash !== null && address !== null ? openAttempt(store, linkHash, address) : null);
+  }, [store, linkHash, address]);
+
+  // Follow an unresolved attempt one step at a time. A step that changes the
+  // attempt saves it, and the new record runs the next step.
+  useEffect(() => {
+    if (attempt === null || isResolved(attempt)) return;
+    if (attempt.status === "sent" && provider === null) return;
+    let current = true;
+    setFollowing(true);
+    void followAttempt(attempt, { store, provider, isCancelled: () => !current }).then((next) => {
+      if (!current) return;
+      setFollowing(false);
+      if (next !== attempt) setAttempt(next);
+    });
+    return () => {
+      current = false;
+    };
+  }, [attempt, provider, store, followRound]);
+
+  const followAgain = useCallback(() => setFollowRound((round) => round + 1), []);
+
   const confirm = useCallback(async () => {
     if (view === null || linkRisk === null || address === null || provider === null || signer === null) return;
     setAction({ status: "checking" });
-    const sent = await prepareAndSend({
+    const result = await prepareAndSend({
       shown: view,
       requestedRisk: linkRisk,
       taker: address,
       provider,
       signer,
+      attempts: store,
       onWallet: () => {
         if (alive.current) setAction({ status: "wallet" });
       },
     });
     if (!alive.current) return;
-    if (!sent.ok) {
-      if (sent.view !== undefined) setLoad({ status: "ready", view: sent.view });
-      setAction({ status: "refused", lines: sent.lines });
+    if (result.kind === "refused") {
+      if (result.view !== undefined) setLoad({ status: "ready", view: result.view });
+      setAction({ status: "refused", lines: result.lines });
+      // The refusal may be an attempt already open in another tab: show it.
+      setAttempt(openAttempt(store, view.quote.hash, address));
       return;
     }
-    setAction({ status: "sent", hash: sent.hash });
-    const mined = await waitForMined({ provider, hash: sent.hash, startBlock: sent.startBlock, commitmentHash: view.quote.hash });
-    if (!alive.current) return;
-    if (mined.status === "failed") {
-      setAction({ status: "failed", hash: mined.hash, lines: mined.lines });
-      return;
-    }
-    setAction({ status: "confirmed", hash: mined.hash, blockNumber: mined.blockNumber, matched: mined.matched });
-    const fill = await waitForFill({
-      commitmentHash: view.quote.hash,
-      taker: address,
-      txHash: mined.hash,
-      isCancelled: () => !alive.current,
-    });
-    if (!alive.current) return;
-    setAction(
-      fill === null
-        ? { status: "unrecorded", hash: mined.hash, matched: mined.matched }
-        : { status: "recorded", hash: mined.hash, matched: mined.matched, fill },
-    );
-  }, [view, linkRisk, address, provider, signer]);
+    setAction({ status: "idle" });
+    setAttempt(result.attempt);
+  }, [view, linkRisk, address, provider, signer, store]);
 
   const approve = useCallback(async () => {
     if (view === null || address === null || provider === null || signer === null) return;
@@ -291,7 +330,7 @@ export default function Take() {
     setApproval({ status: "sent", hash: sent.hash });
     const mined = await waitForMined({ provider, hash: sent.hash, startBlock: sent.startBlock, commitmentHash: null });
     if (!alive.current) return;
-    if (mined.status === "failed") {
+    if (mined.status !== "confirmed") {
       setApproval({ status: "failed", lines: mined.lines });
       return;
     }
@@ -318,14 +357,16 @@ export default function Take() {
         {link.ok && load.status === "refused" && <Lines lines={load.lines} className={panel} />}
 
         {view !== null && (
-          <>
-            <section aria-label="preview" className={panel}>
-              <Lines lines={view.preview} className="space-y-1" />
-            </section>
+          <section aria-label="preview" className={panel}>
+            <Lines lines={view.preview} className="space-y-1" />
+          </section>
+        )}
 
-            {isSent(action) ? (
-              <SentPanel sent={action} />
-            ) : (
+        {attempt !== null && <AttemptPanel attempt={attempt} following={following} onCheckAgain={followAgain} />}
+
+        {view !== null && (
+          <>
+            {attempt === null && (
               <section aria-label="wallet" className="space-y-3 text-sm">
                 {!isConnected &&
                   (hasInjectedWallet() ? (
