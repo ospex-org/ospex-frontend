@@ -192,6 +192,10 @@ export function formatEasternMs(epochMs: number, seconds = false): string | null
 
 // ── the preview ────────────────────────────────────────────────────────
 
+/** Said when a quote's signed expiry is later than the game's start. Not one of the connector's sentences. */
+export const LATE_FILL =
+  "If you confirm late in your wallet, or the network is slow, this bet can still fill after the game starts.";
+
 export interface PreviewInput {
   market: Market;
   takerSide: Side;
@@ -215,6 +219,9 @@ export interface PreviewInput {
  * The paid amount is rounded to the cent and the won amount rounded DOWN, so
  * the headline never promises more than the chain pays; the exact line follows
  * whenever either differs from its cents.
+ *
+ * One sentence is the page's own: when the quote outlives the start, the
+ * preview says that a late confirmation can still fill after it (`LATE_FILL`).
  */
 export function previewLines(input: PreviewInput): string[] {
   const { market, takerSide, lineTicks, teams, startMs, expiryMs, plan } = input;
@@ -225,11 +232,14 @@ export function previewLines(input: PreviewInput): string[] {
   ];
   const push = pushSentence(market, lineTicks, teams);
   if (push !== null) out.push(push);
-  out.push(
-    expiryMs > startMs
-      ? `Take it before the game starts, ${startsAt}. The quote itself expires later than that.`
-      : `Quote expires ${formatEasternMs(expiryMs) ?? new Date(expiryMs).toISOString()}.`,
-  );
+  if (expiryMs > startMs) {
+    out.push(`Take it before the game starts, ${startsAt}. The quote itself expires later than that.`);
+    // The contract checks the quote's expiry, not the game's start, so a take
+    // confirmed late can still fill once the game is under way.
+    out.push(LATE_FILL);
+  } else {
+    out.push(`Quote expires ${formatEasternMs(expiryMs) ?? new Date(expiryMs).toISOString()}.`);
+  }
   if (!isWholeCents(plan.takerRisk) || !isWholeCents(plan.fillMakerRisk)) {
     out.push(
       `Exact amounts: you pay ${formatUsdcExact(plan.takerRisk)} USDC and win ${formatUsdcExact(plan.fillMakerRisk)} USDC.`,

@@ -115,7 +115,7 @@ describe("the connector's own literals", () => {
     ]);
   });
 
-  it("names the start as the deadline when the quote outlives it", () => {
+  it("names the start as the deadline when the quote outlives it, and says a late confirmation can fill after it", () => {
     const late = quote("spread", {
       lineTicks: -15,
       makerPositionType: 0,
@@ -127,6 +127,8 @@ describe("the connector's own literals", () => {
       "Philadelphia Phillies (home) +1.5 — Tampa Bay Rays @ Philadelphia Phillies, Sun Sep 27, 3:05 pm ET.",
       "Risk 1.00 USDC to win 1.00 at 2.00.",
       "Take it before the game starts, Sun Sep 27, 3:05 pm ET. The quote itself expires later than that.",
+      // The page's own sentence; the lines above are the connector's.
+      "If you confirm late in your wallet, or the network is slow, this bet can still fill after the game starts.",
     ]);
   });
 

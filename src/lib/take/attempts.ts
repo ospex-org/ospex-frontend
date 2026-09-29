@@ -73,7 +73,10 @@ export interface Attempt {
   sentAt: number | null;
   hash: string | null;
   blockNumber: number | null;
-  /** The mined block's time. */
+  /**
+   * The mined block's time: from the block itself, or, when the page never saw
+   * the receipt, from the fill, whose time the API gives as the block's.
+   */
   minedAt: number | null;
   /** What the receipt's CommitmentMatched event says was moved. */
   matched: { takerRisk: string; makerRisk: string; oddsTick: number } | null;
@@ -278,6 +281,31 @@ export function walletError(reason: string): string {
   return `Your wallet answered with an error after it was asked to send the take (${reason}), so the page cannot tell whether it was sent.`;
 }
 
-export function whenMs(ms: number | null): string | null {
-  return ms === null ? null : formatEasternMs(ms, true);
+function at(ms: number, seconds = true): string {
+  return formatEasternMs(ms, seconds) ?? new Date(ms).toISOString();
+}
+
+/**
+ * True when the take was mined at or after the game's start, as the last check
+ * read it. The contract fills a quote until its signed expiry, and a quote can
+ * be signed to expire after the start.
+ */
+export function filledAfterKickoff(attempt: Attempt): boolean {
+  return attempt.minedAt !== null && attempt.minedAt >= attempt.startMs;
+}
+
+/** Said when a take was mined after the game started, or null when it was not. */
+export function kickoffSentence(attempt: Attempt): string | null {
+  if (attempt.minedAt === null || !filledAfterKickoff(attempt)) return null;
+  return `Filled after kickoff: it was mined ${at(attempt.minedAt)}, after the game's start at ${at(attempt.startMs, false)}.`;
+}
+
+/** The times the record holds, as lines: the last check, the handoff, the send and the block. */
+export function timeline(attempt: Attempt): string[] {
+  const out = [`Last check: ${at(attempt.lastCheckAt)}.`, `Handed to your wallet: ${at(attempt.handoffAt)}.`];
+  if (attempt.sentAt !== null) out.push(`Sent: ${at(attempt.sentAt)}.`);
+  if (attempt.minedAt !== null) {
+    out.push(`Mined: ${at(attempt.minedAt)}${attempt.blockNumber === null ? "" : `, block ${String(attempt.blockNumber)}`}.`);
+  }
+  return out;
 }

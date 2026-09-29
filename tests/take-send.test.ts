@@ -6,6 +6,7 @@
  * The attempt records go to an in-memory storage that a test can hand to a
  * new store, which is what a reload does.
  */
+import { ethers } from "ethers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import quoteBody from "./fixtures/quote-under-47.json";
 import contestBody from "./fixtures/contest-478.json";
@@ -15,14 +16,17 @@ import {
   PAGE_STOPPED,
   attemptStore,
   handoff,
+  kickoffSentence,
   openAttempt,
+  timeline,
   walletError,
   type AttemptStore,
 } from "../src/lib/take/attempts";
-import { MATCHING_MODULE } from "../src/lib/take/constants";
+import { COMMITMENT_TYPES, EIP712_DOMAIN, MATCHING_MODULE, SCORERS } from "../src/lib/take/constants";
 import { assessTake, readContest, readQuote, type TakeView } from "../src/lib/take/quote";
 import { followAttempt, prepareAndSend } from "../src/lib/take/send";
-import { encodeMatchCommitment } from "../src/lib/take/tx";
+import { encodeMatchCommitment, hashCommitment } from "../src/lib/take/tx";
+import { LATE_FILL } from "../src/lib/take/words";
 import { TAKER, TX_HASH, fakeWallet, stubApi, type FakeWallet } from "./helpers/wallet";
 
 const LINK_HASH = "0x44cfbdfe8524667942a3d8f9784d212fea27b852459091d7de5a440ad34a2617";
@@ -274,5 +278,155 @@ describe("a reload while the outcome is unknown", () => {
       "The page was closed or reloaded while your wallet was asking you to confirm, so it cannot tell whether the take was sent.",
     );
     expect(openAttempt(store, LINK_HASH, TAKER)?.status).toBe("unknown");
+  });
+});
+
+/**
+ * A quote like the live one, but signed to expire an hour after kickoff, by a
+ * key made for this test that holds nothing. The contract fills it until then.
+ */
+async function quoteOutlivingKickoff(): Promise<{ body: Record<string, unknown>; hash: string; maker: string }> {
+  const signer = ethers.Wallet.createRandom();
+  const message = {
+    maker: signer.address.toLowerCase(),
+    contestId: "478",
+    scorer: SCORERS.total.toLowerCase(),
+    lineTicks: 470,
+    positionType: 0 as const,
+    oddsTick: 206,
+    riskAmount: "5000000",
+    nonce: "1",
+    expiry: String(KICKOFF / 1000 + 3_600),
+  };
+  const signature = await signer._signTypedData(EIP712_DOMAIN, COMMITMENT_TYPES, message);
+  const hash = hashCommitment(message);
+  return {
+    body: { ...quoteBody, commitmentHash: hash, maker: message.maker, nonce: "1", expiry: "2026-10-04T14:30:00+00:00", signature },
+    hash,
+    maker: message.maker,
+  };
+}
+
+/** The CommitmentMatched log a 1 USDC take of that quote writes, from the event as the contract declares it. */
+function matchedLog(hash: string, maker: string) {
+  const pad = (address: string) => ethers.utils.hexZeroPad(address, 32);
+  return {
+    address: MATCHING_MODULE,
+    topics: [
+      ethers.utils.id(
+        "CommitmentMatched(bytes32,address,address,uint256,uint256,address,int32,uint8,uint16,uint256,uint256,uint256,uint256,uint256)",
+      ),
+      hash,
+      pad(maker),
+      pad(TAKER),
+    ],
+    data: ethers.utils.defaultAbiCoder.encode(
+      ["uint256", "uint256", "address", "int32", "uint8", "uint16", "uint256", "uint256", "uint256", "uint256", "uint256"],
+      [478, 994, SCORERS.total, 470, 0, 206, 943_300, 999_898, 5_000_000, 1, KICKOFF / 1000 + 3_600],
+    ),
+  };
+}
+
+describe("a quote whose signed expiry is later than the start", () => {
+  it("says in the preview that a late confirmation can still fill after the game starts", async () => {
+    const quote = await quoteOutlivingKickoff();
+    const read = readQuote(quote.body, quote.hash);
+    const contest = readContest(contestBody);
+    if (read.kind !== "quote" || contest === null) throw new Error("fixture did not read");
+    const assessed = assessTake({ quote: read.quote, contest, requestedRisk: 1_000_000n, nowMs: TEN_OUT });
+    expect(assessed.ok && assessed.view.preview).toEqual([
+      `Under 47.0 — ${GAME}, Sun Oct 4, 9:30 am ET.`,
+      "Risk 1.00 USDC to win 0.94 at 1.94.",
+      "A combined score of exactly 47 is a push: the stake is returned.",
+      "Take it before the game starts, Sun Oct 4, 9:30 am ET. The quote itself expires later than that.",
+      "If you confirm late in your wallet, or the network is slow, this bet can still fill after the game starts.",
+      "Exact amounts: you pay 0.999898 USDC and win 0.943300 USDC.",
+    ]);
+    expect(LATE_FILL).toBe(
+      "If you confirm late in your wallet, or the network is slow, this bet can still fill after the game starts.",
+    );
+  });
+
+  it("is not refused when the wallet confirms after kickoff; it records the times and says it filled after kickoff", async () => {
+    const quote = await quoteOutlivingKickoff();
+    stubApi({ quote: quote.body, contest: contestBody });
+    const storage = memoryStorage();
+    const store = attemptStore(storage);
+    let t = TEN_OUT;
+    const wallet = fakeWallet({
+      // Ten and a half minutes with the confirmation open in the wallet.
+      onSend: () => {
+        t = KICKOFF + 30_000;
+        return TX_HASH;
+      },
+      mine: () => ({ blockNumber: 94_700_000, timestampMs: KICKOFF + 34_000, status: 1, logs: [matchedLog(quote.hash, quote.maker)] }),
+    });
+    const read = readQuote(quote.body, quote.hash);
+    const contest = readContest(contestBody);
+    if (read.kind !== "quote" || contest === null) throw new Error("fixture did not read");
+    const assessed = assessTake({ quote: read.quote, contest, requestedRisk: 1_000_000n, nowMs: TEN_OUT });
+    if (!assessed.ok) throw new Error(assessed.lines.join(" "));
+
+    const result = await prepareAndSend({
+      shown: assessed.view,
+      requestedRisk: 1_000_000n,
+      taker: TAKER,
+      provider: wallet.provider,
+      signer: wallet.signer,
+      attempts: store,
+      onWallet: () => undefined,
+      now: () => t,
+    });
+    if (result.kind !== "sent") throw new Error(`expected a send, got ${JSON.stringify(result)}`);
+    expect(wallet.sends).toHaveLength(1);
+    expect(result.attempt).toMatchObject({ status: "sent", startMs: KICKOFF, lastCheckAt: TEN_OUT, handoffAt: TEN_OUT, sentAt: KICKOFF + 30_000 });
+
+    const mined = await followAttempt(result.attempt, { store, provider: wallet.provider, isCancelled: () => false, now: () => t });
+    expect(mined).toMatchObject({
+      status: "confirmed",
+      hash: TX_HASH,
+      blockNumber: 94_700_000,
+      minedAt: KICKOFF + 34_000,
+      matched: { takerRisk: "999898", makerRisk: "943300", oddsTick: 206 },
+    });
+    expect(kickoffSentence(mined)).toBe(
+      "Filled after kickoff: it was mined Sun Oct 4, 9:30:34 am ET, after the game's start at Sun Oct 4, 9:30 am ET.",
+    );
+    expect(timeline(mined)).toEqual([
+      "Last check: Sun Oct 4, 9:20:00 am ET.",
+      "Handed to your wallet: Sun Oct 4, 9:20:00 am ET.",
+      "Sent: Sun Oct 4, 9:30:30 am ET.",
+      "Mined: Sun Oct 4, 9:30:34 am ET, block 94700000.",
+    ]);
+    // A reload reads back the same record.
+    expect(attemptStore(storage).list(quote.hash, TAKER)).toEqual([mined]);
+  });
+
+  it("does not say so when the take was mined before the start", async () => {
+    const quote = await quoteOutlivingKickoff();
+    stubApi({ quote: quote.body, contest: contestBody });
+    const store = attemptStore(memoryStorage());
+    const wallet = fakeWallet({
+      mine: () => ({ blockNumber: 94_699_700, timestampMs: TEN_OUT + 4_000, status: 1, logs: [matchedLog(quote.hash, quote.maker)] }),
+    });
+    const read = readQuote(quote.body, quote.hash);
+    const contest = readContest(contestBody);
+    if (read.kind !== "quote" || contest === null) throw new Error("fixture did not read");
+    const assessed = assessTake({ quote: read.quote, contest, requestedRisk: 1_000_000n, nowMs: TEN_OUT });
+    if (!assessed.ok) throw new Error(assessed.lines.join(" "));
+    const result = await prepareAndSend({
+      shown: assessed.view,
+      requestedRisk: 1_000_000n,
+      taker: TAKER,
+      provider: wallet.provider,
+      signer: wallet.signer,
+      attempts: store,
+      onWallet: () => undefined,
+      now: () => TEN_OUT,
+    });
+    if (result.kind !== "sent") throw new Error(`expected a send, got ${JSON.stringify(result)}`);
+    const mined = await followAttempt(result.attempt, { store, provider: wallet.provider, isCancelled: () => false });
+    expect(mined).toMatchObject({ status: "confirmed", minedAt: TEN_OUT + 4_000 });
+    expect(kickoffSentence(mined)).toBeNull();
   });
 });

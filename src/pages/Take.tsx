@@ -9,7 +9,9 @@ import {
   attemptStore,
   browserStorage,
   isResolved,
+  kickoffSentence,
   openAttempt,
+  timeline,
   type Attempt,
 } from "@/lib/take/attempts";
 import { readWallet, walletProblems, walletReads, type Problem } from "@/lib/take/checks";
@@ -124,9 +126,11 @@ function TxLink({ hash }: { hash: string }) {
 function AttemptPanel({ attempt, following, onCheckAgain }: { attempt: Attempt; following: boolean; onCheckAgain: () => void }) {
   const { status } = attempt;
   const open = status === "handoff" || status === "unknown";
+  const kickoff = status === "confirmed" || status === "recorded" ? kickoffSentence(attempt) : null;
   return (
     <section aria-label="your take" className={panel}>
       {open && <p className="font-medium leading-relaxed">{IN_FLIGHT}</p>}
+      {kickoff !== null && <p className="font-medium">{kickoff}</p>}
       {attempt.hash !== null && (
         <p>
           Transaction: <TxLink hash={attempt.hash} />
@@ -186,6 +190,7 @@ function AttemptPanel({ attempt, following, onCheckAgain }: { attempt: Attempt; 
           </Button>
         </div>
       )}
+      <Lines lines={timeline(attempt)} className="pt-2 text-xs text-muted-foreground" />
     </section>
   );
 }

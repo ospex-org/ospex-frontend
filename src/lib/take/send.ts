@@ -249,7 +249,8 @@ async function prepare(args: Parameters<typeof prepareAndSend>[0]): Promise<Send
 }
 
 export type Mined =
-  | { status: "confirmed"; hash: string; blockNumber: number; matched: MatchedEvent | null }
+  /** `minedAt` is the block's time, or null when the block could not be read. */
+  | { status: "confirmed"; hash: string; blockNumber: number; minedAt: number | null; matched: MatchedEvent | null }
   /** Definitely not placed: mined and reverted, or replaced by the wallet with something else. */
   | { status: "failed"; hash: string; lines: string[] }
   /** Not followed to an end: the transaction may still be mined. */
@@ -287,7 +288,7 @@ export async function waitForMined(args: {
   const response = provider._wrapTransaction(tx, hash, startBlock);
   try {
     const receipt = await response.wait(1);
-    return confirmed(receipt, commitmentHash);
+    return await confirmed(provider, receipt, commitmentHash);
   } catch (err) {
     const e = err as {
       code?: unknown;
@@ -298,7 +299,7 @@ export async function waitForMined(args: {
     };
     if (e.code === ethers.errors.TRANSACTION_REPLACED) {
       if (e.reason === "repriced" && e.receipt !== undefined) {
-        if (e.receipt.status === 1) return confirmed(e.receipt, commitmentHash);
+        if (e.receipt.status === 1) return await confirmed(provider, e.receipt, commitmentHash);
         return failedOnChain(e.receipt.transactionHash);
       }
       return {
@@ -314,11 +315,22 @@ export async function waitForMined(args: {
   }
 }
 
-function confirmed(receipt: ethers.providers.TransactionReceipt, commitmentHash: string | null): Mined {
+async function confirmed(
+  provider: ethers.providers.Web3Provider,
+  receipt: ethers.providers.TransactionReceipt,
+  commitmentHash: string | null,
+): Promise<Mined> {
+  let minedAt: number | null = null;
+  try {
+    minedAt = (await provider.getBlock(receipt.blockNumber)).timestamp * 1000;
+  } catch {
+    minedAt = null;
+  }
   return {
     status: "confirmed",
     hash: receipt.transactionHash.toLowerCase(),
     blockNumber: receipt.blockNumber,
+    minedAt,
     matched: commitmentHash === null ? null : matchedEvent(receipt.logs, commitmentHash),
   };
 }
@@ -386,7 +398,13 @@ export async function followAttempt(
               makerRisk: mined.matched.makerRisk.toString(),
               oddsTick: mined.matched.oddsTick,
             };
-      return save(update(attempt, { status: "confirmed", hash: mined.hash, blockNumber: mined.blockNumber, matched }, now()));
+      return save(
+        update(
+          attempt,
+          { status: "confirmed", hash: mined.hash, blockNumber: mined.blockNumber, minedAt: mined.minedAt, matched },
+          now(),
+        ),
+      );
     }
     if (mined.status === "failed") {
       return save(update(attempt, { status: "failed", hash: mined.hash, note: mined.lines.join(" ") }, now()));
