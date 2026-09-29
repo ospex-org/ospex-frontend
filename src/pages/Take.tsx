@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { AppHeader } from "@/components/AppHeader";
 import { Button } from "@/components/ui/button";
@@ -6,11 +6,15 @@ import { useWeb3 } from "@/lib/wallet/web3Onboard";
 import { getCommitment, getContest, getFills, type Fill } from "@/lib/take/api";
 import {
   IN_FLIGHT,
-  attemptStore,
-  browserStorage,
+  NO_MEMORY,
+  SECOND_BET,
+  SENT_SINCE,
+  UNSENT,
   isResolved,
   kickoffSentence,
   openAttempt,
+  pageAttemptStore,
+  sentSinceHandoff,
   timeline,
   type Attempt,
 } from "@/lib/take/attempts";
@@ -121,7 +125,8 @@ function TxLink({ hash }: { hash: string }) {
 
 /**
  * Where a handed-off take stands, from its record. While its outcome is not
- * known, the page says so, looks for its fill, and offers no take.
+ * known, the page says so and looks for its fill; the only take it offers is
+ * "Take anyway", after the tick.
  */
 function AttemptPanel({ attempt, following, onCheckAgain }: { attempt: Attempt; following: boolean; onCheckAgain: () => void }) {
   const { status } = attempt;
@@ -130,6 +135,7 @@ function AttemptPanel({ attempt, following, onCheckAgain }: { attempt: Attempt; 
   return (
     <section aria-label="your take" className={panel}>
       {open && <p className="font-medium leading-relaxed">{IN_FLIGHT}</p>}
+      {status === "unsent" && <p className="font-medium leading-relaxed">{UNSENT}</p>}
       {kickoff !== null && <p className="font-medium">{kickoff}</p>}
       {attempt.hash !== null && (
         <p>
@@ -167,6 +173,7 @@ function AttemptPanel({ attempt, following, onCheckAgain }: { attempt: Attempt; 
       {open && (
         <>
           {attempt.note !== null && <p className="text-muted-foreground">{attempt.note}</p>}
+          {sentSinceHandoff(attempt) && <p>{SENT_SINCE}</p>}
           <p className="text-muted-foreground">
             {following
               ? "Looking for this bet among Ospex's fills from your wallet on this quote…"
@@ -183,13 +190,6 @@ function AttemptPanel({ attempt, following, onCheckAgain }: { attempt: Attempt; 
           Check again
         </button>
       )}
-      {open && (
-        <div className="pt-2">
-          <Button className={primary} disabled>
-            Take this bet
-          </Button>
-        </div>
-      )}
       <Lines lines={timeline(attempt)} className="pt-2 text-xs text-muted-foreground" />
     </section>
   );
@@ -204,13 +204,15 @@ export default function Take() {
 
   const { isConnected, address, provider, signer, connectWallet, walletChainId, switchToPolygon } = useWeb3();
 
-  const store = useMemo(() => attemptStore(browserStorage()), []);
+  const store = pageAttemptStore();
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [checks, setChecks] = useState<Checks>({ status: "idle" });
   const [action, setAction] = useState<Action>({ status: "idle" });
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [following, setFollowing] = useState(false);
   const [followRound, setFollowRound] = useState(0);
+  /** The id of the unknown attempt the person has ticked "may place a second bet" for. */
+  const [acknowledgedFor, setAcknowledgedFor] = useState<string | null>(null);
   const [approval, setApproval] = useState<Approval>({ status: "idle" });
   const [checkRound, setCheckRound] = useState(0);
   const alive = useRef(true);
@@ -297,7 +299,8 @@ export default function Take() {
 
   const followAgain = useCallback(() => setFollowRound((round) => round + 1), []);
 
-  const confirm = useCallback(async () => {
+  /** Take the quote; `acknowledged` is the unknown attempt the person ticked "may place a second bet" for. */
+  const confirm = useCallback(async (acknowledged?: string) => {
     if (view === null || linkRisk === null || address === null || provider === null || signer === null) return;
     setAction({ status: "checking" });
     const result = await prepareAndSend({
@@ -310,6 +313,7 @@ export default function Take() {
       onWallet: () => {
         if (alive.current) setAction({ status: "wallet" });
       },
+      acknowledged,
     });
     if (!alive.current) return;
     if (result.kind === "refused") {
@@ -347,6 +351,13 @@ export default function Take() {
   const approving = approval.status === "wallet" || approval.status === "sent";
   const ready = view !== null && checks.status === "done" && checks.problems.length === 0 && !busy && !approving;
   const needsApproval = checks.status === "done" && checks.problems.some((problem) => problem.code === "allowance_short");
+  // An attempt whose outcome is unknown: the wallet section stays, and offers
+  // "Take anyway" once the person has ticked that it may place a second bet.
+  const locked = attempt !== null && attempt.status === "unknown" ? attempt : null;
+  const ticked = locked !== null && acknowledgedFor === locked.id;
+  const takeable = attempt === null || locked !== null || attempt.status === "unsent";
+  const takeLabel = (idle: string) =>
+    action.status === "wallet" ? "Confirm in your wallet…" : action.status === "checking" ? "Checking…" : idle;
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-6">
@@ -369,9 +380,13 @@ export default function Take() {
 
         {attempt !== null && <AttemptPanel attempt={attempt} following={following} onCheckAgain={followAgain} />}
 
+        {!store.remembers() && (busy || (attempt !== null && !isResolved(attempt))) && (
+          <p className="text-sm font-medium leading-relaxed">{NO_MEMORY}</p>
+        )}
+
         {view !== null && (
           <>
-            {attempt === null && (
+            {takeable && (
               <section aria-label="wallet" className="space-y-3 text-sm">
                 {!isConnected &&
                   (hasInjectedWallet() ? (
@@ -455,10 +470,26 @@ export default function Take() {
                   </button>
                 )}
 
-                {isConnected && (
+                {isConnected && locked === null && (
                   <div className="pt-2">
                     <Button className={primary} disabled={!ready} onClick={() => void confirm()}>
-                      {action.status === "wallet" ? "Confirm in your wallet…" : action.status === "checking" ? "Checking…" : "Take this bet"}
+                      {takeLabel("Take this bet")}
+                    </Button>
+                  </div>
+                )}
+                {isConnected && locked !== null && (
+                  <div className="space-y-2 pt-2">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={ticked}
+                        disabled={busy}
+                        onChange={(event) => setAcknowledgedFor(event.target.checked ? locked.id : null)}
+                      />
+                      {SECOND_BET}
+                    </label>
+                    <Button className={primary} disabled={!ready || !ticked} onClick={() => void confirm(locked.id)}>
+                      {takeLabel("Take anyway")}
                     </Button>
                   </div>
                 )}

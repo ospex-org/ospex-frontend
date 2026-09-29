@@ -13,13 +13,19 @@ import contestBody from "./fixtures/contest-478.json";
 import type { Fill } from "../src/lib/take/api";
 import {
   IN_FLIGHT,
+  NO_MEMORY,
   PAGE_STOPPED,
+  SECOND_BET,
+  SENT_SINCE,
+  UNSENT,
   attemptStore,
   handoff,
   kickoffSentence,
   openAttempt,
+  sentSinceHandoff,
   timeline,
   walletError,
+  type Attempt,
   type AttemptStore,
 } from "../src/lib/take/attempts";
 import { COMMITMENT_TYPES, EIP712_DOMAIN, MATCHING_MODULE, SCORERS } from "../src/lib/take/constants";
@@ -37,6 +43,9 @@ const TEN_OUT = KICKOFF - 10 * 60_000;
 /** A fill this wallet made on the quote before the attempt, and the one the attempt made. */
 const EARLIER_TX = `0x${"e1".repeat(32)}`;
 const THIS_TX = `0x${"e2".repeat(32)}`;
+
+/** Another account, for a wallet whose account changes while a take is prepared. */
+const OTHER = `0x${"00".repeat(18)}beef`;
 
 function apiFill(txHash: string, filledAt: string) {
   return {
@@ -208,18 +217,197 @@ describe("a take whose outcome is lost", () => {
     expect((await send(again, attempts, () => TEN_OUT + 5_000)).kind).toBe("sent");
     expect(again.sends).toHaveLength(1);
   });
+});
 
-  it("is not handed to the wallet when the browser will not keep its record", async () => {
+/** One round of looking for an attempt's fill, answered with `fills`, with the clock at `at`. */
+function lookOnce(attempt: Attempt, store: AttemptStore, wallet: FakeWallet, fills: Fill[], at: number) {
+  return followAttempt(attempt, {
+    store,
+    provider: wallet.provider,
+    isCancelled: () => false,
+    now: () => at,
+    fills: async () => fills,
+    tries: 1,
+    intervalMs: 0,
+  });
+}
+
+describe("the ways out of an unknown outcome", () => {
+  it("releases it when the send failed before reaching the wallet and the wallet's count has not moved", async () => {
     stubApi({ quote: quoteBody, contest: contestBody });
-    const wallet = fakeWallet();
-    expect(await send(wallet, attemptStore(null), () => TEN_OUT)).toEqual({
-      kind: "refused",
-      lines: [
-        "This browser would not let the page keep a record of the bet, so it has not sent one. " +
-          "Allow this site to store data, then reload.",
-      ],
+    const store = attemptStore(memoryStorage());
+    // The account in the wallet changes while the take is prepared, so ethers
+    // refuses to send from it: the wallet is never asked.
+    let account = TAKER;
+    const wallet = fakeWallet({
+      accounts: () => [account],
+      onEstimateGas: () => {
+        account = OTHER;
+      },
+      counts: () => ({ latest: 41, pending: 41 }),
     });
+    const first = await send(wallet, store, () => TEN_OUT);
+    if (first.kind !== "unknown") throw new Error(`expected an unknown outcome, got ${JSON.stringify(first)}`);
     expect(wallet.sends).toHaveLength(0);
+    expect(first.attempt).toMatchObject({
+      status: "unknown",
+      note: walletError("from address mismatch"),
+      nonce: { latest: 41, pending: 41 },
+    });
+    expect(await send(fakeWallet(), store, () => TEN_OUT + 5_000)).toEqual({ kind: "refused", lines: [IN_FLIGHT] });
+
+    // A round of looking finds no fill, and the count has not moved: nothing was sent.
+    const released = await lookOnce(first.attempt, store, wallet, [], TEN_OUT + 180_000);
+    expect(released).toMatchObject({ status: "unsent", nonceCheck: { latest: 41, pending: 41, at: TEN_OUT + 180_000 } });
+    expect(UNSENT).toBe(
+      "Nothing was sent: Polygon shows no transaction from your wallet since this take was handed to it, and Ospex " +
+        "lists no fill, so you can take this quote again; if your wallet still shows a request for this take, reject it first.",
+    );
+    expect(openAttempt(store, LINK_HASH, TAKER)).toBeNull();
+    const again = fakeWallet();
+    expect((await send(again, store, () => TEN_OUT + 181_000)).kind).toBe("sent");
+    expect(again.sends).toHaveLength(1);
+  });
+
+  it("is not released on the count for an address with code, which can send without moving it", async () => {
+    stubApi({ quote: quoteBody, contest: contestBody });
+    const store = attemptStore(memoryStorage());
+    let account = TAKER;
+    const wallet = fakeWallet({
+      accounts: () => [account],
+      onEstimateGas: () => {
+        account = OTHER;
+      },
+      counts: () => ({ latest: 41, pending: 41 }),
+      // An EIP-7702 delegation: 0xef0100 and the delegate's address.
+      code: () => `0xef0100${"ab".repeat(20)}`,
+    });
+    const first = await send(wallet, store, () => TEN_OUT);
+    if (first.kind !== "unknown") throw new Error(`expected an unknown outcome, got ${JSON.stringify(first)}`);
+    expect(await lookOnce(first.attempt, store, wallet, [], TEN_OUT + 180_000)).toBe(first.attempt);
+    expect(openAttempt(store, LINK_HASH, TAKER)).toMatchObject({ status: "unknown", nonceCheck: null });
+  });
+
+  it("keeps a lost take open while the wallet's count has moved, until its own fill appears", async () => {
+    stubApi({ quote: quoteBody, contest: contestBody, fills: () => [apiFill(EARLIER_TX, "2026-09-29T06:06:42+00:00")] });
+    const store = attemptStore(memoryStorage());
+    const counts = { latest: 41, pending: 41 };
+    const wallet = fakeWallet({
+      counts: () => counts,
+      // The wallet sends the take, which Polygon counts as pending, and loses the answer.
+      onSend: () => {
+        counts.pending = 42;
+        throw new Error("Failed to fetch");
+      },
+    });
+    const first = await send(wallet, store, () => TEN_OUT);
+    if (first.kind !== "unknown") throw new Error(`expected an unknown outcome, got ${JSON.stringify(first)}`);
+    expect(wallet.sends).toHaveLength(1);
+    expect(first.attempt.nonce).toEqual({ latest: 41, pending: 41 });
+
+    // A round finds only the earlier fill, and the count has moved: still open.
+    const earlier = fill(EARLIER_TX, "2026-09-29T06:06:42+00:00");
+    const looking = await lookOnce(first.attempt, store, wallet, [earlier], TEN_OUT + 180_000);
+    expect(looking).toMatchObject({ status: "unknown", nonceCheck: { latest: 41, pending: 42, at: TEN_OUT + 180_000 } });
+    expect(sentSinceHandoff(looking)).toBe(true);
+    expect(SENT_SINCE).toBe(
+      "Polygon shows a transaction from your wallet since this take was handed to it, so the take may have been sent: " +
+        "the page keeps looking for its fill.",
+    );
+    expect(await send(fakeWallet(), store, () => TEN_OUT + 181_000)).toEqual({ kind: "refused", lines: [IN_FLIGHT] });
+
+    // Once the count has moved it is not read again for this attempt, so a
+    // pending count that drops back does not release it.
+    counts.pending = 41;
+    expect(await lookOnce(looking, store, wallet, [earlier], TEN_OUT + 360_000)).toBe(looking);
+    expect(openAttempt(store, LINK_HASH, TAKER)?.status).toBe("unknown");
+
+    // Its fill appears: shown, and the attempt is resolved.
+    const resolved = await lookOnce(looking, store, wallet, [earlier, fill(THIS_TX, "2026-10-04T13:21:07+00:00")], TEN_OUT + 400_000);
+    expect(resolved).toMatchObject({
+      status: "recorded",
+      hash: THIS_TX,
+      fill: { txHash: THIS_TX, takerRisk: "999898", makerRisk: "943300", oddsTick: 206 },
+    });
+    expect(openAttempt(store, LINK_HASH, TAKER)).toBeNull();
+  });
+
+  it("sends a second take over an unknown one only after the tick, and records the tick", async () => {
+    stubApi({ quote: quoteBody, contest: contestBody });
+    const store = attemptStore(memoryStorage());
+    const lost = fakeWallet({
+      onSend: () => {
+        throw new Error("Failed to fetch");
+      },
+    });
+    const first = await send(lost, store, () => TEN_OUT);
+    if (first.kind !== "unknown") throw new Error(`expected an unknown outcome, got ${JSON.stringify(first)}`);
+
+    const again = fakeWallet();
+    const t = TEN_OUT + 60_000;
+    const take = (acknowledged?: string) =>
+      prepareAndSend({
+        shown: shownAt(t),
+        requestedRisk: 1_000_000n,
+        taker: TAKER,
+        provider: again.provider,
+        signer: again.signer,
+        attempts: store,
+        onWallet: () => undefined,
+        now: () => t,
+        acknowledged,
+      });
+
+    // Not ticked, or ticked for another attempt: refused, and the wallet is not asked.
+    expect(await take()).toEqual({ kind: "refused", lines: [IN_FLIGHT] });
+    expect(await take("another-attempt")).toEqual({ kind: "refused", lines: [IN_FLIGHT] });
+    expect(again.sends).toHaveLength(0);
+    expect(openAttempt(store, LINK_HASH, TAKER)).toMatchObject({ id: first.attempt.id, status: "unknown" });
+
+    // Ticked for this attempt: the second take goes to the wallet, and the tick is recorded on the first.
+    const second = await take(first.attempt.id);
+    if (second.kind !== "sent") throw new Error(`expected a send, got ${JSON.stringify(second)}`);
+    expect(again.sends).toHaveLength(1);
+    expect(store.list(LINK_HASH, TAKER).find((kept) => kept.id === first.attempt.id)).toMatchObject({
+      status: "acknowledged",
+      acknowledgedAt: t,
+    });
+    expect(openAttempt(store, LINK_HASH, TAKER)).toMatchObject({ id: second.attempt.id, status: "sent", hash: TX_HASH });
+    expect(SECOND_BET).toBe("I understand this may place a second bet");
+
+    // The tick sets aside only an attempt whose outcome is unknown: not one the wallet has sent.
+    expect(await take(second.attempt.id)).toEqual({ kind: "refused", lines: [IN_FLIGHT] });
+    expect(again.sends).toHaveLength(1);
+  });
+
+  it("sends when the browser keeps no record, holds it in memory instead, and says not to reload", async () => {
+    // No storage at all, or one that refuses writes, as a full or private one can.
+    const refusing: Pick<Storage, "getItem" | "setItem"> = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("QuotaExceededError");
+      },
+    };
+    const cases: Array<[string, Pick<Storage, "getItem" | "setItem"> | null, boolean]> = [
+      ["no storage", null, false],
+      ["a storage that refuses writes", refusing, false],
+      ["a storage that keeps it", memoryStorage(), true],
+    ];
+    for (const [label, storage, remembers] of cases) {
+      stubApi({ quote: quoteBody, contest: contestBody });
+      const store = attemptStore(storage);
+      const wallet = fakeWallet();
+      expect((await send(wallet, store, () => TEN_OUT)).kind, label).toBe("sent");
+      expect(wallet.sends, label).toHaveLength(1);
+      expect(store.remembers(), label).toBe(remembers);
+      // Kept for as long as the page is open: a second take is refused as before.
+      expect(openAttempt(store, LINK_HASH, TAKER), label).toMatchObject({ status: "sent", hash: TX_HASH });
+      expect(await send(fakeWallet(), store, () => TEN_OUT + 5_000), label).toEqual({ kind: "refused", lines: [IN_FLIGHT] });
+    }
+    expect(NO_MEMORY).toBe(
+      "This browser would not let the page keep a record of this bet, so it cannot remember the bet across a reload: " +
+        "do not reload or close this page while the bet is in flight.",
+    );
   });
 });
 
@@ -268,6 +456,7 @@ describe("a reload while the outcome is unknown", () => {
       startMs: KICKOFF,
       startBlock: 1,
       knownFills: [],
+      nonce: { latest: 7, pending: 7 },
       lastCheckAt: TEN_OUT,
       handoffAt: TEN_OUT,
     });

@@ -37,6 +37,12 @@ export function fakeWallet(
     onSend?: (tx: Record<string, string>) => Promise<string> | string;
     /** Mines a sent transaction at once, into this block. */
     mine?: (tx: Record<string, string>) => Mining;
+    /** The accounts the wallet reports. The taker's alone unless given. */
+    accounts?: () => string[];
+    /** The wallet's transaction count, mined and with pending ones. 7 and 7 unless given. */
+    counts?: () => { latest: number; pending: number };
+    /** The code at the wallet's address. None unless given. */
+    code?: () => string;
   } = {},
 ): FakeWallet {
   const sends: Array<Record<string, string>> = [];
@@ -49,9 +55,15 @@ export function fakeWallet(
       case "net_version":
         return "137";
       case "eth_accounts":
-        return [TAKER];
+        return hooks.accounts?.() ?? [TAKER];
       case "eth_blockNumber":
         return hex(BASE_BLOCK);
+      case "eth_getTransactionCount": {
+        const counts = hooks.counts?.() ?? { latest: 7, pending: 7 };
+        return hex(params[1] === "pending" ? counts.pending : counts.latest);
+      }
+      case "eth_getCode":
+        return hooks.code?.() ?? "0x";
       case "eth_getBalance":
         return "0xde0b6b3a7640000";
       case "eth_call": {

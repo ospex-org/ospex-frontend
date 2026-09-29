@@ -18,10 +18,12 @@
  * `chainId` is set for the wallet to check against the network it is on.
  *
  * Every take is an attempt with a record (`attempts.ts`), written before the
- * wallet is asked and again at each change. An attempt whose outcome is not
- * known blocks the next one until its fill is found; `followAttempt` takes one
- * step towards knowing it, whether the attempt began on this page or before a
- * reload.
+ * wallet is asked and again at each change, and carrying the wallet's
+ * transaction count as read just before. An attempt whose outcome is not known
+ * blocks the next take until its fill is found, until the count shows that
+ * nothing was sent, or until the person ticks that taking the quote again may
+ * place a second bet. `followAttempt` takes one step towards knowing it,
+ * whether the attempt began on this page or before a reload.
  */
 
 import { ethers } from "ethers";
@@ -33,10 +35,12 @@ import {
   handoff,
   openAttempt,
   recorded,
+  sentSinceHandoff,
   update,
   walletError,
   type Attempt,
   type AttemptStore,
+  type TxCount,
 } from "./attempts";
 import { MATCHING_MODULE, POLYGON_CHAIN_ID, USDC } from "./constants";
 import { readWallet, walletProblems, walletReads } from "./checks";
@@ -118,7 +122,9 @@ function refused(from: Refusal): SendResult {
  * hand it to the wallet. Resolves once the wallet has answered.
  *
  * An unresolved attempt on this quote from this wallet, from this page or from
- * before a reload, refuses at once: its transaction may be in flight.
+ * before a reload, refuses at once: its transaction may be in flight. The one
+ * exception is an attempt whose outcome is unknown and which the person has
+ * acknowledged, by ticking that taking the quote again may place a second bet.
  */
 export async function prepareAndSend(args: {
   shown: TakeView;
@@ -131,6 +137,8 @@ export async function prepareAndSend(args: {
   onWallet: () => void;
   /** The clock. A test passes one it can move. */
   now?: () => number;
+  /** The id of the unknown attempt the person ticked "may place a second bet" for. */
+  acknowledged?: string | undefined;
 }): Promise<SendResult> {
   const result = await prepare(args);
   return "kind" in result ? result : refused(result);
@@ -144,7 +152,8 @@ async function prepare(args: Parameters<typeof prepareAndSend>[0]): Promise<Send
   // shown. The last check refuses if the quote no longer gives those amounts.
   const view = shown;
 
-  if (openAttempt(attempts, view.quote.hash, taker) !== null) {
+  const open = openAttempt(attempts, view.quote.hash, taker);
+  if (open !== null && !(open.status === "unknown" && open.id === args.acknowledged)) {
     return { ok: false, lines: [IN_FLIGHT] };
   }
 
@@ -193,6 +202,15 @@ async function prepare(args: Parameters<typeof prepareAndSend>[0]): Promise<Send
     return { ok: false, lines: refusalFromError(err, "The network fee could not be worked out") };
   }
 
+  let nonce: TxCount;
+  try {
+    // Kept with the attempt: if the count has not moved when an unknown outcome
+    // is looked into, nothing was sent.
+    nonce = await txCount(provider, taker);
+  } catch (err) {
+    return { ok: false, lines: [`Your wallet's transaction count could not be read just now (${shortReason(err)}).`, NOTHING_SENT] };
+  }
+
   // The last check, after every await above and as the final step before the
   // wallet: the quote and the game read again and judged against the clock as
   // it is now. The signed expiry is never touched.
@@ -206,7 +224,9 @@ async function prepare(args: Parameters<typeof prepareAndSend>[0]): Promise<Send
     };
   }
 
-  // Written before the wallet is asked, so that a reload from here on finds it.
+  // Written before the wallet is asked, so that a reload from here on finds it,
+  // or, in a browser that keeps nothing, so that this page does.
+  const handoffAt = now();
   let attempt = handoff({
     quote: view.quote.hash,
     taker,
@@ -216,18 +236,14 @@ async function prepare(args: Parameters<typeof prepareAndSend>[0]): Promise<Send
     startMs: fresh.view.startMs,
     startBlock,
     knownFills: fresh.knownFills,
+    nonce,
     lastCheckAt: fresh.checkedAt,
-    handoffAt: now(),
+    handoffAt,
   });
-  if (!attempts.save(attempt)) {
-    return {
-      ok: false,
-      lines: [
-        "This browser would not let the page keep a record of the bet, so it has not sent one. " +
-          "Allow this site to store data, then reload.",
-      ],
-    };
-  }
+  // The acknowledged attempt is set aside only now, as the new take goes to the
+  // wallet. A refusal before this point leaves it open.
+  if (open !== null) attempts.save(update(open, { status: "acknowledged", acknowledgedAt: handoffAt }, handoffAt));
+  attempts.save(attempt);
 
   onWallet();
   try {
@@ -352,7 +368,10 @@ function failedOnChain(hash: string): Mined {
  *   sent       follow the transaction until it is mined (needs the wallet)
  *   confirmed  look for its fill, under its hash
  *   unknown    look for its fill: under its hash if it has one, otherwise a fill
- *              from this wallet on this quote that was not there at the handoff
+ *              from this wallet on this quote that was not there at the handoff;
+ *              after a round that finds none, read the wallet's transaction
+ *              count once: not moved since the handoff, nothing was sent and the
+ *              attempt becomes unsent; moved, it stays open
  *
  * A fill appears once its block is final, usually within about fifteen seconds
  * of confirming, so the API is asked every three seconds for up to three
@@ -415,15 +434,55 @@ export async function followAttempt(
   if (attempt.status === "confirmed" || attempt.status === "unknown") {
     const read = deps.fills ?? getFills;
     const tries = deps.tries ?? 60;
+    let looked = false;
     for (let round = 0; round < tries; round += 1) {
       if (deps.isCancelled()) return attempt;
       const fills = await read(attempt.quote, attempt.taker);
-      const fill = fills === null ? null : fillOf(attempt, fills);
-      if (fill !== null) return save(recorded(attempt, fill, now()));
+      if (fills !== null) {
+        looked = true;
+        const fill = fillOf(attempt, fills);
+        if (fill !== null) return save(recorded(attempt, fill, now()));
+      }
       if (round + 1 < tries) await sleep(deps.intervalMs ?? 3_000);
+    }
+    // A round of looking found no fill, so a transaction the wallet sent has had
+    // that long to show in its count. Read once: a count that has moved keeps
+    // the attempt open, and is not read again for it.
+    if (attempt.status === "unknown" && attempt.nonce !== null && attempt.nonceCheck === null && looked && deps.provider !== null) {
+      const count = await readCount(deps.provider, attempt.taker);
+      if (count === null || deps.isCancelled()) return attempt;
+      const nonceCheck = { ...count, at: now() };
+      const moved = sentSinceHandoff({ ...attempt, nonceCheck });
+      return save(update(attempt, moved ? { nonceCheck } : { nonceCheck, status: "unsent" }, now()));
     }
   }
   return attempt;
+}
+
+/** The wallet's transaction count: mined, and with pending ones. */
+async function txCount(provider: ethers.providers.Web3Provider, address: string): Promise<TxCount> {
+  const [latest, pending] = await Promise.all([
+    provider.getTransactionCount(address, "latest"),
+    provider.getTransactionCount(address, "pending"),
+  ]);
+  return { latest, pending };
+}
+
+/**
+ * The count again, for telling whether an unknown take was sent, or null when
+ * it cannot tell: it could not be read, the wallet is on another network, or
+ * the address has code (a smart account, or an account delegated under
+ * EIP-7702), which can act through another sender without moving its own count.
+ */
+async function readCount(provider: ethers.providers.Web3Provider, address: string): Promise<TxCount | null> {
+  try {
+    const chainId = Number.parseInt(String(await provider.send("eth_chainId", [])), 16);
+    if (chainId !== POLYGON_CHAIN_ID) return null;
+    if ((await provider.getCode(address)) !== "0x") return null;
+    return await txCount(provider, address);
+  } catch {
+    return null;
+  }
 }
 
 /** Ask the wallet to approve the PositionModule for `amount` of USDC. Resolves with the hash once sent. */
