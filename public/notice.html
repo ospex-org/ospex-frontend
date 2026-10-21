@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The notice — Ospex</title>
+</head>
+<body>
+  <p>We have plans to make Ospex an absolutely kick-ass, robust, fun protocol. But there are gaps now — significant ones — and because of those gaps, I wouldn't recommend using it now. However: check the scoring history, because it's solid. Check the settlement logic, because we spent a lot of time coming up with something that should produce really good, accurate results. Check the signpost and come back here soon, because once we make a few adjustments to this thing, it's going to be really, really good. And if you want to mess around with it just to get used to how it works, go for it — just do low stakes.</p>
+
+  <h2>The gaps</h2>
+  <ul>
+    <li>A quote the maker has pulled stays matchable until it expires; the courier is the fix, designed, in the next deploy.</li>
+    <li>One maker.</li>
+    <li>Pennies.</li>
+    <li>Today's set has one scorer, run by Vince through Chainlink; its owner can stop scoring at any moment (pause, delete, unlink), and Chainlink's admin can pause anything. On today's set money comes back only if the operator voids the game, so the operator is trusted, hence low stakes. For the next set: a game keeps the scorers it was made with, and a game nothing scores ends in a release at day 30, money back.</li>
+  </ul>
+
+  <h2>What to check</h2>
+  <ul>
+    <li><a href="https://github.com/ospex-org/ospex-artifacts/blob/main/scoring/README.md">The scoring record</a></li>
+    <li><a href="https://github.com/ospex-org/ospex-contracts-v2/blob/d2be2cb10f9cc0f54d7df807d6aa750b4c3dafdd/src/modules/PositionModule.sol#L272">The settlement logic — PositionModule.sol</a></li>
+    <li><a href="https://polygonscan.com/address/0x6A487d62aA9D803cF465F3d8fcF363d6cEb1602A#readContract">The signpost — 0x6A487d62aA9D803cF465F3d8fcF363d6cEb1602A on Polygon</a></li>
+  </ul>
+
+  <h2>The come-back signal</h2>
+  <p>Come back when the signpost's games entry for the next set is marked live; today's entry is marked building and can never move to live.</p>
+
+  <h2>The delay, as it stands</h2>
+  <p>The Polygon timelock's delay is 60 seconds during the alpha; <a href="https://polygonscan.com/address/0x8CED8e82cf1488B7365C0726aEeD795b6C07582C#readContract">read getMinDelay() on chain</a>. Raising it to seven days is the last step before the first user.</p>
+
+  <h2>For the next set</h2>
+  <p>The creation dollar is a tip, not a wage, until there is volume.</p>
+</body>
+</html>

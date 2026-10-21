@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
-    "start": "serve -s dist -l $PORT"
+    "start": "serve dist -l $PORT"
   },
   "engines": {
     "node": ">=20"
