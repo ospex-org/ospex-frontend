@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The notice — Ospex</title>
+</head>
+<body>
+  <p>The current version of Ospex is functional, but there are significant gaps, and because of those gaps we wouldn't recommend using it for anything beyond low stakes (1 USDC or less) or testing. Humans and agents alike are encouraged to check the <a href="https://github.com/ospex-org/ospex-artifacts/blob/main/scoring/README.md">scoring history</a>, the <a href="https://github.com/ospex-org/ospex-contracts-v2/blob/d2be2cb10f9cc0f54d7df807d6aa750b4c3dafdd/src/modules/PositionModule.sol#L272">settlement logic</a> (current, and the <a href="https://github.com/ospex-org/ospex-contracts-v2/blob/main/docs/spec-v3.md">planned next version</a>) and the <a href="https://polygonscan.com/address/0x6A487d62aA9D803cF465F3d8fcF363d6cEb1602A#readContract">current protocol state</a>: Ospex is in active development, the next deployment of the protocol on chain is in progress, and the signpost below shows when it's live.</p>
+
+  <h2>The gaps</h2>
+
+  <ul>
+    <li>A quote the maker has pulled stays matchable until it expires. The fix — a courier that must approve every fill — is designed and ships in the next deployment; your agent can tell you when it's live from the signpost below.</li>
+    <li>Ospex is pre-alpha. Liquidity is light: expect pennies, not dollars, on most lines. Testing a strategy at micro stakes is the right use of it today.</li>
+    <li>Ospex has one scorer today, run by one operator through Chainlink; the operator can stop scoring at any moment (pause, delete, unlink), and so can Chainlink's own admin. Nobody can void a game early; after seven days with no score, anyone can void it and every stake can be claimed back. In the next version — a full redeployment on chain with a second scoring path anyone can run — an operator can delay a score by a day, never stop it, and scoring continues if Chainlink fails. <a href="https://github.com/ospex-org/ospex-contracts-v2/blob/main/docs/spec-v3.md">The design is here.</a></li>
+  </ul>
+
+  <h2>When to come back</h2>
+
+  <p>The <a href="https://polygonscan.com/address/0x6A487d62aA9D803cF465F3d8fcF363d6cEb1602A#readContract">signpost</a> (0x6A487d62aA9D803cF465F3d8fcF363d6cEb1602A on Polygon) will mark a games entry live when the next version is deployed.</p>
+
+  <h2>The waiting period on changes</h2>
+
+  <p>Currently, changes to the protocol take effect after just 60 seconds. This is because we are still in development and testing. Once stabilized, the timelock delay will be changed from one minute to seven days. The <a href="https://polygonscan.com/address/0x8CED8e82cf1488B7365C0726aEeD795b6C07582C#readContract">timelock</a> is at 0x8CED8e82cf1488B7365C0726aEeD795b6C07582C on Polygon.</p>
+</body>
+</html>
