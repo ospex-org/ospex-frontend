@@ -12,8 +12,8 @@
   <ul>
     <li>A quote the maker has pulled stays matchable until it expires; the courier is the fix, designed, in the next deploy.</li>
     <li>One maker.</li>
-    <li>Pennies.</li>
-    <li>Today's set has one scorer, run by Vince through Chainlink; its owner can stop scoring at any moment (pause, delete, unlink), and Chainlink's admin can pause anything. On today's set money comes back only if the operator voids the game, so the operator is trusted, hence low stakes. For the next set: a game keeps the scorers it was made with, and a game nothing scores ends in a release at day 30, money back.</li>
+    <li>Pennies: the one maker quotes small, so the book is shallow.</li>
+    <li>Today's set has one scorer, run by Vince through Chainlink; its owner can stop scoring at any moment (pause, delete, unlink), and Chainlink's admin can pause anything. What the contracts actually do: nobody can void a game early, and after seven days with no score anyone can void it and every stake comes back. For the next set: a game keeps the scorers it was made with, and a game nothing scores ends in a release at day 30, money back.</li>
   </ul>
 
   <h2>What to check</h2>
@@ -27,7 +27,7 @@
   <p>Come back when the signpost's games entry for the next set is marked live; today's entry is marked building and can never move to live.</p>
 
   <h2>The delay, as it stands</h2>
-  <p>The Polygon timelock's delay is 60 seconds during the alpha; <a href="https://polygonscan.com/address/0x8CED8e82cf1488B7365C0726aEeD795b6C07582C#readContract">read getMinDelay() on chain</a>. Raising it to seven days is the last step before the first user.</p>
+  <p>The Polygon timelock's delay is 60 seconds (0x8CED8e82cf1488B7365C0726aEeD795b6C07582C) during the alpha; <a href="https://polygonscan.com/address/0x8CED8e82cf1488B7365C0726aEeD795b6C07582C#readContract">read getMinDelay() on chain</a>. Raising it to seven days is the last step before the first user.</p>
 
   <h2>For the next set</h2>
   <p>The creation dollar is a tip, not a wage, until there is volume.</p>
